@@ -14,6 +14,7 @@ from frame_analyser import (  # noqa: E402
     ModuleDiscoveryAnalyser,
     SessionAnalyser,
     StatisticsEngine,
+    TelemetryCandidateAnalyser,
     UdsDecoder,
     analyse,
 )
@@ -101,6 +102,67 @@ def test_module_discovery_finds_paired_response():
     assert request_entry.role == "request"
     assert request_entry.paired_id == "7E8"
     assert request_entry.module_present is True
+
+
+def test_telemetry_candidate_analyser_flags_changing_did_value():
+    # Real DID (033C) from input/log_*.csv PCM sweep, values observed to
+    # drift between 01-52 and 01-53 across repeated reads.
+    frames = [
+        FrameParser().parse(_entry("246092,CAN1,7E0,0,0,8,03-22-03-3C-00-00-00-00", 1)),
+        FrameParser().parse(_entry("246095,CAN1,7E8,0,0,8,05-62-03-3C-01-52-00-00", 2)),
+        FrameParser().parse(_entry("263974,CAN1,7E0,0,0,8,03-22-03-3C-00-00-00-00", 3)),
+        FrameParser().parse(_entry("263977,CAN1,7E8,0,0,8,05-62-03-3C-01-53-00-00", 4)),
+    ]
+    entries = TelemetryCandidateAnalyser().discover(frames)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.arbitration_id == "7E8"
+    assert entry.did == "033C"
+    assert entry.read_count == 2
+    assert entry.distinct_value_count == 2
+    assert entry.sample_values == ["01 52", "01 53"]
+
+
+def test_telemetry_candidate_analyser_ignores_constant_value():
+    frames = [
+        FrameParser().parse(_entry("100000,CAN1,7E8,0,0,8,05-62-03-3C-01-52-00-00", 1)),
+        FrameParser().parse(_entry("110000,CAN1,7E8,0,0,8,05-62-03-3C-01-52-00-00", 2)),
+    ]
+    entries = TelemetryCandidateAnalyser().discover(frames)
+    assert entries == []
+
+
+def test_telemetry_candidate_analyser_attaches_known_hypothesis():
+    # Real DID (051C) confirmed via public Ford PX2/Everest community PID
+    # database as Air Charge Temp (Intercooler) -- see DID_NAME_HYPOTHESES.
+    frames = [
+        FrameParser().parse(_entry("244995,CAN1,7E0,0,0,8,03-22-05-1C-00-00-00-00", 1)),
+        FrameParser().parse(_entry("244998,CAN1,7E8,0,0,8,04-62-05-1C-39-00-00-00", 2)),
+        FrameParser().parse(_entry("263510,CAN1,7E0,0,0,8,03-22-05-1C-00-00-00-00", 3)),
+        FrameParser().parse(_entry("263513,CAN1,7E8,0,0,8,04-62-05-1C-3A-00-00-00", 4)),
+    ]
+    entries = TelemetryCandidateAnalyser().discover(frames)
+
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry.did == "051C"
+    assert entry.possible_name == "Air Charge Temp (Intercooler) [ACT]"
+    assert entry.confidence == "confirmed"
+
+
+def test_telemetry_candidate_analyser_unknown_did_has_no_hypothesis():
+    frames = [
+        FrameParser().parse(_entry("246092,CAN1,7E0,0,0,8,03-22-03-3C-00-00-00-00", 1)),
+        FrameParser().parse(_entry("246095,CAN1,7E8,0,0,8,05-62-03-3C-01-52-00-00", 2)),
+        FrameParser().parse(_entry("263974,CAN1,7E0,0,0,8,03-22-03-3C-00-00-00-00", 3)),
+        FrameParser().parse(_entry("263977,CAN1,7E8,0,0,8,05-62-03-3C-01-99-00-00", 4)),
+    ]
+    entries = TelemetryCandidateAnalyser().discover(frames)
+
+    assert len(entries) == 1
+    assert entries[0].possible_name == "Possible secondary analog sensor (fine resolution)"
+    assert entries[0].confidence == "hypothesis-low"
 
 
 def test_read_log_file_skips_csv_header(tmp_path):

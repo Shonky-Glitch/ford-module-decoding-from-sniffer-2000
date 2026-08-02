@@ -84,6 +84,32 @@ class ModuleDiscoveryEntry:
 
 
 @dataclass
+class TelemetryCandidateEntry:
+    """A ReadDataByIdentifier (UDS service 0x22) DID whose value changed
+    across repeated single-frame reads within a capture -- a candidate for
+    live telemetry/gauge display.
+
+    This only flags a DID as dynamic/worth polling further; it does NOT
+    infer what the DID means (units/scaling) on its own. `possible_name`/
+    `confidence`/`notes` carry an OPTIONAL, clearly-labelled research
+    hypothesis (from public reference lookups or byte-pattern reasoning) for
+    a human to field-test -- never treat these as confirmed without an
+    actual correlation test. See AGENTS.md: never guess packet meaning.
+    """
+
+    arbitration_id: str
+    did: str
+    read_count: int
+    distinct_value_count: int
+    first_seen_ms: int | None
+    last_seen_ms: int | None
+    sample_values: list[str] = field(default_factory=list)
+    possible_name: str | None = None
+    confidence: str = "unidentified"
+    notes: str = ""
+
+
+@dataclass
 class AnalysisResult:
     """The result of analysing a collection of frames."""
 
@@ -91,5 +117,6 @@ class AnalysisResult:
     canid_stats: dict[str, CanIdStats] = field(default_factory=dict)
     sessions: list[Session] = field(default_factory=list)
     module_discovery: list[ModuleDiscoveryEntry] = field(default_factory=list)
+    telemetry_candidates: list[TelemetryCandidateEntry] = field(default_factory=list)
     summary: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)

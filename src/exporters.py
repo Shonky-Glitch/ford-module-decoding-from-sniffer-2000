@@ -168,6 +168,49 @@ def export_module_discovery_csv(result: AnalysisResult, output_path: Path) -> No
             )
 
 
+def export_telemetry_candidates_csv(result: AnalysisResult, output_path: Path) -> None:
+    """Write candidate live-telemetry DIDs to a CSV file.
+
+    These are ReadDataByIdentifier (UDS service 0x22) DIDs whose value
+    changed across repeated single-frame reads in the capture -- see
+    TelemetryCandidateAnalyser in frame_analyser.py. This flags DIDs worth
+    polling for a gauge/telemetry display; it does not claim to know what
+    any DID physically represents (units/scaling are not guessed).
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "arbitration_id",
+                "did",
+                "read_count",
+                "distinct_value_count",
+                "first_seen_ms",
+                "last_seen_ms",
+                "sample_values",
+                "possible_name",
+                "confidence",
+                "notes",
+            ]
+        )
+        for entry in result.telemetry_candidates:
+            writer.writerow(
+                [
+                    entry.arbitration_id,
+                    entry.did,
+                    entry.read_count,
+                    entry.distinct_value_count,
+                    entry.first_seen_ms if entry.first_seen_ms is not None else "",
+                    entry.last_seen_ms if entry.last_seen_ms is not None else "",
+                    "; ".join(entry.sample_values),
+                    entry.possible_name or "",
+                    entry.confidence,
+                    entry.notes,
+                ]
+            )
+
+
 def export_report(result: AnalysisResult, output_path: Path) -> None:
     """Write a human-readable engineering summary report."""
     lines = [

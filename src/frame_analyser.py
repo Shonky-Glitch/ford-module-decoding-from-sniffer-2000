@@ -25,6 +25,7 @@ from models import (
     ModuleDiscoveryEntry,
     RawLogEntry,
     Session,
+    TelemetryCandidateEntry,
 )
 
 # UDS (ISO 14229) request service IDs. This table is the standardised
@@ -706,6 +707,169 @@ class ModuleDiscoveryAnalyser:
         )
 
 
+# Research notes for PCM (7E0/7E8) DIDs found by TelemetryCandidateAnalyser.
+# "confirmed" = independently sourced (public Ford Ranger PX2/Everest owner
+# community PID database, saeb.net "OBD PID Information" forum, archived
+# 2024-07-01) and matches this capture's observed byte layout/values.
+# "hypothesis-*" entries are NOT confirmed -- they are pattern-based guesses
+# (byte size, value drift, clustering with confirmed DIDs in the same 03xx/
+# F4xx families) offered only so a human can field-test them (e.g. via
+# GreatScan 3.5) against a known reference. Never treat a hypothesis entry
+# as ground truth. See AGENTS.md: never guess packet meaning.
+DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
+    "051C": (
+        "Air Charge Temp (Intercooler) [ACT]",
+        "confirmed",
+        "Source: saeb.net Ford Ranger PX2/Everest community PID list "
+        "(module 7E0, mode 22). Equation: raw-40=degC. Observed raw "
+        "0x39/0x3A (57/58) -> 17/18 degC, consistent with intercooler temp.",
+    ),
+    "F433": (
+        "Possible temperature sensor (F4xx family)",
+        "hypothesis-high",
+        "1-byte value in the confirmed F4xx temp-DID range (alongside "
+        "F405 coolant, F40F intake, F446 ambient, F45C oil). If it shares "
+        "the same raw-40=degC scaling: ~61-62 degC at capture time. "
+        "Needs a field test against a known temp reference.",
+    ),
+    "F43C": (
+        "Possible high-resolution temperature sensor (F4xx family)",
+        "hypothesis-medium",
+        "2-byte value in the F4xx temp range; one read spiked from ~0x0408 "
+        "to 0x04E6, consistent with a transient temp rise (e.g. EGT/oil). "
+        "If (raw/10)-40=degC: ~63 degC baseline, ~85 degC spike. Needs a "
+        "field test against a known temp reference.",
+    ),
+    "F442": (
+        "Possible manifold/boost pressure sensor",
+        "hypothesis-low",
+        "2-byte value (~12020-12040), F4xx range but magnitude too large "
+        "for the simple raw-40 temp scaling used by other F4xx DIDs here. "
+        "Small drift is consistent with a steady idle MAP/boost reading "
+        "under some other scaling (e.g. /100). Needs a field test.",
+    ),
+    "033C": (
+        "Possible secondary analog sensor (fine resolution)",
+        "hypothesis-low",
+        "2-byte value, +/-1 LSB drift (0x0152/0x0153). Same 03xx family as "
+        "the confirmed 03F3 (Sump Oil Temp) DID, but 2-byte instead of "
+        "1-byte -- could be a higher-resolution temp/pressure. Needs a "
+        "field test.",
+    ),
+    "035A": (
+        "Possible analog sensor (moderate drift)",
+        "hypothesis-low",
+        "2-byte value, 0x034A-0x034E (842-846), more variation than 033C. "
+        "Same 03xx family. Could be engine-load/pressure-related. Needs a "
+        "field test.",
+    ),
+    "03BA": (
+        "Possible analog sensor (moderate drift)",
+        "hypothesis-low",
+        "2-byte value, 0x0287-0x0289 (647-649). Same 03xx family as 035A/"
+        "033C. Needs a field test.",
+    ),
+    "0914": (
+        "Possible cyclic/stepped parameter",
+        "hypothesis-low",
+        "2-byte value, alternates in blocks between ~0x030B and ~0x0310 "
+        "(779/784). 09xx range does not match the confirmed 03xx/F4xx temp "
+        "families -- could be a duty cycle or counter, and may be related "
+        "to the adjacent DID 0915. Needs a field test.",
+    ),
+    "0915": (
+        "Possible paired parameter to 0914",
+        "hypothesis-low",
+        "Adjacent DID to 0914 with similar alternating-block behaviour "
+        "(0x018B/0x0185 = 395/389). May be a related pair (e.g. dual-bank "
+        "sensor or short/long-term trim). Needs a field test.",
+    ),
+    "9800": (
+        "Possible status/counter register",
+        "hypothesis-low",
+        "2-byte value, near-constant with a rare +/-5 drift (0x041E/0x0423 "
+        "= 1054/1059). Unusual DID range (0x98xx) that doesn't match any "
+        "confirmed temp/voltage family found so far. Needs a field test.",
+    ),
+}
+
+
+class TelemetryCandidateAnalyser:
+    """Flags ReadDataByIdentifier (UDS service 0x22) DIDs that are
+    candidates for live telemetry/gauge display.
+
+    A DID is flagged only when it was read more than once via a
+    single-frame positive response *and* its value changed across those
+    reads -- this is observed behaviour in the capture, not an assumption
+    about which DIDs carry live data. Multi-frame (first_frame/
+    consecutive_frame) responses are excluded: they require ISO-TP flow
+    control per read, making them slow/poor candidates for a polled gauge
+    regardless of content.
+
+    This does NOT identify what a DID means (units/scaling) on its own --
+    only that it is dynamic and worth further correlation testing against
+    known ground truth. Optional research hypotheses from DID_NAME_HYPOTHESES
+    are attached (clearly labelled, never treated as confirmed) so a human
+    can field-test them. See AGENTS.md: never guess packet meaning.
+    """
+
+    SERVICE_ID = "22"
+
+    def __init__(self, name_hypotheses: dict[str, tuple[str, str, str]] | None = None) -> None:
+        self._name_hypotheses = name_hypotheses if name_hypotheses is not None else DID_NAME_HYPOTHESES
+
+    def discover(self, frames: list[Frame]) -> list[TelemetryCandidateEntry]:
+        reads: dict[tuple[str, str], list[tuple[object, str]]] = {}
+
+        for frame in frames:
+            if frame.fields.get("uds_service_id") != self.SERVICE_ID:
+                continue
+            if frame.fields.get("uds_direction") != "positive_response":
+                continue
+            if frame.fields.get("iso_tp_type") != "single_frame":
+                continue
+
+            uds_data_hex = frame.fields.get("uds_data_hex")
+            if not uds_data_hex:
+                continue
+            uds_bytes = bytes.fromhex(uds_data_hex.replace(" ", ""))
+            if len(uds_bytes) < 3:
+                continue  # 0x62 + 2 DID bytes minimum
+
+            did = uds_bytes[1:3].hex().upper()
+            value = uds_bytes[3:].hex(" ").upper()
+            key = (frame.frame_id, did)
+            reads.setdefault(key, []).append((frame.fields.get("timestamp_ms"), value))
+
+        entries: list[TelemetryCandidateEntry] = []
+        for (arb_id, did), values in reads.items():
+            distinct = {v for _, v in values}
+            if len(values) < 2 or len(distinct) < 2:
+                continue  # read once, or never changed -- not a candidate
+
+            timestamps = [ts for ts, _ in values if ts is not None]
+            possible_name, confidence, notes = self._name_hypotheses.get(
+                did, (None, "unidentified", "")
+            )
+            entries.append(
+                TelemetryCandidateEntry(
+                    arbitration_id=arb_id,
+                    did=did,
+                    read_count=len(values),
+                    distinct_value_count=len(distinct),
+                    first_seen_ms=min(timestamps) if timestamps else None,
+                    last_seen_ms=max(timestamps) if timestamps else None,
+                    sample_values=[v for _, v in values[:5]],
+                    possible_name=possible_name,
+                    confidence=confidence,
+                    notes=notes,
+                )
+            )
+
+        entries.sort(key=lambda e: (-e.read_count, e.arbitration_id, e.did))
+        return entries
+
+
 def build_analysis_result(
     frames: list[Frame], total_entries: int, errors: list[str] | None = None
 ) -> AnalysisResult:
@@ -720,6 +884,7 @@ def build_analysis_result(
     stats_engine = StatisticsEngine()
     session_analyser = SessionAnalyser()
     module_discovery_analyser = ModuleDiscoveryAnalyser(CANDIDATE_MODULE_NAMES)
+    telemetry_candidate_analyser = TelemetryCandidateAnalyser()
 
     result = AnalysisResult()
     result.frames = frames
@@ -727,6 +892,7 @@ def build_analysis_result(
     result.canid_stats = stats_engine.compute(frames)
     result.sessions = session_analyser.build_sessions(frames)
     result.module_discovery = module_discovery_analyser.discover(frames)
+    result.telemetry_candidates = telemetry_candidate_analyser.discover(frames)
 
     result.summary["total_entries"] = total_entries
     result.summary["total_frames"] = len(frames)

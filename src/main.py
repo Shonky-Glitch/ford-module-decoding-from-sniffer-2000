@@ -15,6 +15,7 @@ from exporters import (
     export_json,
     export_module_discovery_csv,
     export_report,
+    export_telemetry_candidates_csv,
 )
 from frame_analyser import AnalysisResult, Frame, build_analysis_result, analyse
 from log_reader import RawLogEntry, read_all_logs
@@ -61,6 +62,7 @@ def _export_all(result: AnalysisResult, output_dir: Path) -> None:
     export_canid_summary_csv(result, output_dir / "can_id_summary.csv")
     export_module_discovery_csv(result, output_dir / "module_discovery.csv")
     export_report(result, output_dir / "report.txt")
+    export_telemetry_candidates_csv(result, output_dir / "telemetry" / "candidates.csv")
 
 
 def export_greatscan_diagnostics(
