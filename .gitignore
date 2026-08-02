@@ -1,0 +1,18 @@
+# Real vehicle capture data and decoded output are not committed by
+# default (see AGENTS.md) - they may contain identifying vehicle info
+# (VIN, part numbers). Folder structure is preserved via .gitkeep.
+/input/*
+!/input/.gitkeep
+/output/*
+!/output/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Editor/OS
+.vscode/
+.DS_Store
