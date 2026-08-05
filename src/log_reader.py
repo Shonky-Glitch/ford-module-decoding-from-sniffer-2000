@@ -14,6 +14,11 @@ from models import RawLogEntry
 # Skipped on read since it is structural, not a data record.
 CSV_HEADER = "ms,bus,id_hex,ext,rtr,dlc,data_hex"
 
+# Extended header seen in newer captures (input/log_021.csv onward, 2026-08-
+# 05) that add `mode` (e.g. "Listen-Only") and J1939-style `pgn`/`sa` columns.
+# Also skipped on read; FrameParser handles both column layouts.
+CSV_HEADER_EXTENDED = "ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
+
 
 def find_log_files(input_dir: Path, pattern: str = "*.csv") -> list[Path]:
     """Return all log files in `input_dir` matching `pattern`, sorted by name."""
@@ -28,7 +33,8 @@ def read_log_file(path: Path) -> list[RawLogEntry]:
             text = line.rstrip("\n\r")
             if not text:
                 continue
-            if line_number == 1 and text.strip().lower() == CSV_HEADER:
+            header_text = text.strip().lower()
+            if line_number == 1 and header_text in (CSV_HEADER, CSV_HEADER_EXTENDED):
                 continue
             entries.append(
                 RawLogEntry(

@@ -13,6 +13,7 @@ from exporters import (
     export_canid_summary_csv,
     export_csv,
     export_json,
+    export_known_pids_csv,
     export_module_discovery_csv,
     export_report,
     export_telemetry_candidates_csv,
@@ -63,6 +64,7 @@ def _export_all(result: AnalysisResult, output_dir: Path) -> None:
     export_module_discovery_csv(result, output_dir / "module_discovery.csv")
     export_report(result, output_dir / "report.txt")
     export_telemetry_candidates_csv(result, output_dir / "telemetry" / "candidates.csv")
+    export_known_pids_csv(result, output_dir / "known_pids.csv")
 
 
 def export_greatscan_diagnostics(

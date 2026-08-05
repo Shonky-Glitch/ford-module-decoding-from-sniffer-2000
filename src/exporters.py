@@ -211,6 +211,44 @@ def export_telemetry_candidates_csv(result: AnalysisResult, output_path: Path) -
             )
 
 
+def export_known_pids_csv(result: AnalysisResult, output_path: Path) -> None:
+    """Write the static "known PIDs/DIDs by module" reference table to CSV.
+
+    Rows come from AnalysisResult.known_dids (built by
+    build_known_did_reference() in frame_analyser.py from
+    DID_NAME_HYPOTHESES/DID_MODULE_HINTS) -- a reference listing, not
+    derived from this specific capture's frames. `confidence` distinguishes
+    confirmed entries from unconfirmed research hypotheses; see AGENTS.md:
+    never guess packet meaning.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "module_name",
+                "code_type",
+                "request_id",
+                "did",
+                "possible_name",
+                "confidence",
+                "notes",
+            ]
+        )
+        for entry in result.known_dids:
+            writer.writerow(
+                [
+                    entry.module_name,
+                    entry.code_type,
+                    entry.request_id,
+                    entry.did,
+                    entry.possible_name,
+                    entry.confidence,
+                    entry.notes,
+                ]
+            )
+
+
 def export_report(result: AnalysisResult, output_path: Path) -> None:
     """Write a human-readable engineering summary report."""
     lines = [
@@ -244,6 +282,18 @@ def export_report(result: AnalysisResult, output_path: Path) -> None:
                 f" ({entry.positive_response_count} pos / "
                 f"{entry.negative_response_count} neg){name}"
             )
+
+    if result.known_dids:
+        lines.append("")
+        lines.append("Known PIDs/DIDs by module:")
+        lines.append("  NOTE: [confirmed] entries are field/reference-verified; [hypothesis-*] entries are unconfirmed guesses.")
+        lines.append("  NOTE: [DID] = UDS Mode 0x22 ReadDataByIdentifier (Ford-specific); [PID] = standard SAE J1979 Mode 0x01.")
+        current_module = None
+        for entry in result.known_dids:
+            if entry.module_name != current_module:
+                current_module = entry.module_name
+                lines.append(f"  {entry.module_name} ({entry.request_id}):")
+            lines.append(f"    [{entry.code_type}] {entry.did} - {entry.possible_name} [{entry.confidence}]")
 
     if result.errors:
         lines.append("")

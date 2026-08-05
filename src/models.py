@@ -110,6 +110,31 @@ class TelemetryCandidateEntry:
 
 
 @dataclass
+class KnownDidEntry:
+    """One row of the static "known PIDs/DIDs by module" reference table.
+
+    Unlike TelemetryCandidateEntry (built from what a specific capture's
+    frames actually show), this is a reference listing of every DID in
+    DID_NAME_HYPOTHESES (frame_analyser.py), grouped by the module it was
+    observed under -- confirmed entries and research hypotheses alike, each
+    clearly labelled via `confidence`. See AGENTS.md: never guess packet
+    meaning -- `confidence` must always be shown alongside `possible_name`.
+
+    `code_type` distinguishes a UDS (ISO 14229) Mode 0x22 ReadDataByIdentifier
+    `did` ("DID") from a standard SAE J1979/ISO 15031 Mode 0x01 Show-Current-
+    Data `pid` ("PID") -- the `did` field holds the raw hex code either way.
+    """
+
+    module_name: str
+    request_id: str
+    did: str
+    possible_name: str
+    confidence: str
+    notes: str = ""
+    code_type: str = "DID"
+
+
+@dataclass
 class AnalysisResult:
     """The result of analysing a collection of frames."""
 
@@ -118,5 +143,6 @@ class AnalysisResult:
     sessions: list[Session] = field(default_factory=list)
     module_discovery: list[ModuleDiscoveryEntry] = field(default_factory=list)
     telemetry_candidates: list[TelemetryCandidateEntry] = field(default_factory=list)
+    known_dids: list[KnownDidEntry] = field(default_factory=list)
     summary: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)

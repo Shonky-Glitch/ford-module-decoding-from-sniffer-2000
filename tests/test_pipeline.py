@@ -161,8 +161,8 @@ def test_telemetry_candidate_analyser_unknown_did_has_no_hypothesis():
     entries = TelemetryCandidateAnalyser().discover(frames)
 
     assert len(entries) == 1
-    assert entries[0].possible_name == "Possible secondary analog sensor (fine resolution)"
-    assert entries[0].confidence == "hypothesis-low"
+    assert entries[0].possible_name is None
+    assert entries[0].confidence == "unidentified"
 
 
 def test_read_log_file_skips_csv_header(tmp_path):

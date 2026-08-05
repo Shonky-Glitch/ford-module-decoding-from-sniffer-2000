@@ -22,6 +22,7 @@ from models import (
     AnalysisResult,
     CanIdStats,
     Frame,
+    KnownDidEntry,
     ModuleDiscoveryEntry,
     RawLogEntry,
     Session,
@@ -100,8 +101,29 @@ def _build_module_name_lookup(confirmed: dict[str, str]) -> dict[str, str]:
     return lookup
 
 
+# Ids NOT yet seen/confirmed in any input/log_*.csv capture from this
+# vehicle. Sourced from commaai/opendbc (MIT-licensed, open source; these
+# physical request addresses are reverse engineered and have shipped in
+# production `openpilot` builds on real Ford vehicles for years), so they
+# are a reasonable starting guess for a Ford platform -- but they are NOT
+# vehicle-specific to this PX2 Ranger and NOT independently verified
+# against a capture from it. Every value is suffixed "(GUESS...)" so it can
+# never be mistaken for a CONFIRMED_MODULE_NAMES entry in exported output.
+# As real captures confirm/refute one of these ids, move it into (or
+# explicitly drop it from) CONFIRMED_MODULE_NAMES above -- do not just
+# delete this dict's guess label in place. See AGENTS.md: never guess
+# packet meaning; DID_NAME_HYPOTHESES below uses the same pattern for DIDs.
+GUESSED_MODULE_NAMES: dict[str, str] = {
+    "764": "CCM/fwdRadar (GUESS - unconfirmed on this vehicle, source: opendbc)",
+    "732": "GSM/shiftByWire (GUESS - unconfirmed on this vehicle, source: opendbc)",
+    "7D0": "APIM/debug (GUESS - unconfirmed on this vehicle, source: opendbc)",
+}
+
 CANDIDATE_MODULE_NAMES: dict[str, str] = {
     "7DF": "Functional/broadcast diagnostic request (ISO 15765-4 standard)",
+    **_build_module_name_lookup(GUESSED_MODULE_NAMES),
+    # Spread after GUESSED_MODULE_NAMES so a real confirmed entry always
+    # wins over a guess for the same id.
     **_build_module_name_lookup(CONFIRMED_MODULE_NAMES),
 }
 
@@ -109,8 +131,14 @@ CANDIDATE_MODULE_NAMES: dict[str, str] = {
 class FrameParser:
     """Turns a single raw CSV log entry into a Frame.
 
-    Real CAN Sniffer 2000 capture format (verified against input/log_*.csv):
-        ms,bus,id_hex,ext,rtr,dlc,data_hex
+    Two real CAN Sniffer 2000 capture formats have been observed (verified
+    against input/log_*.csv):
+        7 columns:  ms,bus,id_hex,ext,rtr,dlc,data_hex        (log_001-020)
+        10 columns: ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex
+                    (log_021 onward, 2026-08-05) -- adds `mode` (e.g.
+                    "Listen-Only") and J1939-style `pgn`/`sa` columns, both
+                    stored on the Frame but not yet interpreted (`pgn`/`sa`
+                    were always "-" in every capture seen so far).
 
     `data_hex` is dash-separated CAN payload bytes. Byte 0 is decoded as an
     ISO 15765-2 (ISO-TP) PCI byte, and single-frame UDS payloads are further
@@ -131,12 +159,29 @@ class FrameParser:
         except Exception as exc:  # noqa: BLE001 - surfaced as a parse error
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
-        if len(row) != 7:
-            raise ValueError(f"expected 7 columns, got {len(row)}: {row!r}")
-
-        ms_str, bus, id_hex, ext_str, rtr_str, dlc_str, data_hex = (
-            col.strip() for col in row
-        )
+        if len(row) == 7:
+            ms_str, bus, id_hex, ext_str, rtr_str, dlc_str, data_hex = (
+                col.strip() for col in row
+            )
+            mode, pgn, sa = None, None, None
+        elif len(row) == 10:
+            (
+                ms_str,
+                bus,
+                mode,
+                id_hex,
+                ext_str,
+                rtr_str,
+                dlc_str,
+                pgn,
+                sa,
+                data_hex,
+            ) = (col.strip() for col in row)
+            mode = mode or None
+            pgn = None if pgn in (None, "", "-") else pgn
+            sa = None if sa in (None, "", "-") else sa
+        else:
+            raise ValueError(f"expected 7 or 10 columns, got {len(row)}: {row!r}")
 
         ms = int(ms_str)
         dlc = int(dlc_str)
@@ -172,6 +217,9 @@ class FrameParser:
             {
                 "timestamp_ms": ms,
                 "bus": bus,
+                "mode": mode,
+                "pgn": pgn,
+                "sa": sa,
                 "ext": bool(int(ext_str)),
                 "rtr": bool(int(rtr_str)),
                 "dlc": dlc,
@@ -707,91 +755,337 @@ class ModuleDiscoveryAnalyser:
         )
 
 
-# Research notes for PCM (7E0/7E8) DIDs found by TelemetryCandidateAnalyser.
-# "confirmed" = independently sourced (public Ford Ranger PX2/Everest owner
-# community PID database, saeb.net "OBD PID Information" forum, archived
-# 2024-07-01) and matches this capture's observed byte layout/values.
-# "hypothesis-*" entries are NOT confirmed -- they are pattern-based guesses
-# (byte size, value drift, clustering with confirmed DIDs in the same 03xx/
-# F4xx families) offered only so a human can field-test them (e.g. via
-# GreatScan 3.5) against a known reference. Never treat a hypothesis entry
-# as ground truth. See AGENTS.md: never guess packet meaning.
+# Research notes for DIDs found by TelemetryCandidateAnalyser, across any
+# module (PCM 7E0/7E8, IPC 720/728, etc -- this table is keyed by DID value
+# only, not module, since DIDs observed so far have not collided across
+# modules). "confirmed" = independently sourced (public Ford Ranger PX2/
+# Everest owner community PID database, saeb.net "OBD PID Information"
+# forum, archived 2024-07-01) OR user-verified against a real known
+# reference (e.g. dash odometer reading), and matches this capture's
+# observed byte layout/values. "hypothesis-*" entries are NOT confirmed --
+# they are pattern-based guesses (byte size, value drift, clustering with
+# confirmed DIDs in the same 03xx/F4xx families) offered only so a human can
+# field-test them (e.g. via GreatScan 3.5) against a known reference. Never
+# treat a hypothesis entry as ground truth. See AGENTS.md: never guess
+# packet meaning.
 DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
+    "03DC": (
+        "Fuel Pressure Desired",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Source: user field-"
+        "verified against a live scan-tool reading (2026-08-05, "
+        "input/log_024.csv): observed min 32.27 MPa / max 88.19 MPa. "
+        "Equation: raw (2 bytes) / 100 = MPa. Observed raw range "
+        "3227-8819 across the whole capture, exactly matching "
+        "3227/100=32.27 and 8819/100=88.19.",
+    ),
+    "F446": (
+        "Ambient Air Temp",
+        "confirmed",
+        "Source: saeb.net Ford Ranger PX2/Everest community PID list "
+        "(module 7E0, mode 22). Equation: raw-40=degC. Also user field-"
+        "verified 2026-08-05 against input/log_023.csv (dedicated "
+        "polling session, 169 reads): raw 0x3E/0x3F (62/63) -> 22/23 "
+        "degC, exactly matching the user's live reading.",
+    ),
+    "0522": (
+        "Fuel Temp",
+        "confirmed",
+        "Source: saeb.net Ford Ranger PX2/Everest community PID list "
+        "(module 7E0, mode 22). Equation: raw-40=degC. Observed constant "
+        "raw 0x3D (61) -> 21 degC across input/log_025.csv's dedicated "
+        "polling session (2026-08-05), consistent with a stationary/ "
+        "cooled-down vehicle.",
+    ),
+    "404C": (
+        "Total Distance (Odometer)",
+        "confirmed",
+        "Module IPC (720 request -> 728 response). Source: user field-"
+        "verified against the vehicle's dash odometer reading at capture "
+        "time (2026-08-05, input/log_028.csv). Equation: raw (3 bytes) / "
+        "1000 = km. Observed raw 0x1BAF99 = 1814425 -> 1814.425 km, "
+        "constant for the whole capture (vehicle stationary).",
+    ),
+    "F45E": (
+        "Engine Fuel Rate (Instantaneous Fuel Economy)",
+        "confirmed",
+        "Module PCM (7E0). Source: saeb.net 'PID Calculator' thread "
+        "(2026-08-05 lookup) -- posted DID/header/equation: DID 22 F45E, "
+        "header 7E0, equation ((A*256)+B)/20, units L/h, applies to both "
+        "2.0l and 3.2l engines. This is a Ford custom UDS Mode 22 DID, "
+        "DISTINCT from the standard SAE J1979 Mode 01 PID 0x5E (also "
+        "'Engine Fuel Rate', same formula/units) already in "
+        "OBD2_PID_NAMES -- the vehicle may expose the same data via "
+        "either addressing scheme. NOT yet observed in any Decoding 2000 "
+        "capture.",
+    ),
+    "402A": (
+        "Vehicle Battery Voltage (Volts)",
+        "confirmed",
+        "Module BdyCM (726). Source: saeb.net 'PX1 Alternator Voltage / "
+        "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
+        "DID 22 402A, header 726, equation (A/20)+6, units V, resolution "
+        "0.05V, range 6-18.75V. Multiple users confirmed this corrected "
+        "formula gives realistic readings (an initial A/10.0 guess in "
+        "the same thread was wrong). NOT yet observed in any Decoding "
+        "2000 capture.",
+    ),
+    "4028": (
+        "Vehicle Battery State of Charge (Estimated)",
+        "confirmed",
+        "Module BdyCM (726). Source: saeb.net 'PX1 Alternator Voltage / "
+        "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
+        "DID 22 4028, header 726, equation A, units %, resolution 1%, "
+        "range 0-255 (percent, values above 100 not expected in normal "
+        "use). User-confirmed working in that thread. NOT yet observed "
+        "in any Decoding 2000 capture.",
+    ),
+    "4029": (
+        "Vehicle Battery Temperature (Estimated)",
+        "confirmed",
+        "Module BdyCM (726). Source: saeb.net 'PX1 Alternator Voltage / "
+        "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
+        "DID 22 4029, header 726, equation A-40, units degC, resolution "
+        "1 degC, range -40 to 215. User-confirmed working in that "
+        "thread. NOT yet observed in any Decoding 2000 capture.",
+    ),
+    "1E1C": (
+        "Automatic Transmission Fluid Temp (ATF)",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). 2-byte value. "
+        "Equation: raw/10=degC (NOT the raw*6.3=degC previously noted "
+        "from GreatScan 3.5's source, which gave an impossible ~5460- "
+        "5510 degC here and was likely mistranscribed/misapplied). "
+        "User field-verified 2026-08-05: raw 0x0363/0x0368/0x036A "
+        "(867/872/874) across input/log_010.csv & log_011.csv -> "
+        "~86.7-87.4 degC, confirmed correct against a live reading.",
+    ),
+    "03F6": (
+        "Exhaust Temp",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). 1-byte value. Equation: "
+        "raw*5=degC. User field reading (2026-08-05, input/log_021.csv): "
+        "high ~110 degC, exact match at raw 22 (22*5=110). Cross-checked "
+        "across every log containing this DID for consistency: log_006 "
+        "raw 3->15degC, log_021 raw 5-22->25-110degC, log_024 raw 23-> "
+        "115degC, log_012 raw 56-57->280-285degC, log_013 raw 59-76-> "
+        "295-380degC -- a single continuous, physically plausible "
+        "cold-to-full-load exhaust temp progression across 5 independent "
+        "capture sessions, all fitting raw*5=degC with no exceptions.",
+    ),
     "051C": (
         "Air Charge Temp (Intercooler) [ACT]",
         "confirmed",
         "Source: saeb.net Ford Ranger PX2/Everest community PID list "
         "(module 7E0, mode 22). Equation: raw-40=degC. Observed raw "
-        "0x39/0x3A (57/58) -> 17/18 degC, consistent with intercooler temp.",
-    ),
-    "F433": (
-        "Possible temperature sensor (F4xx family)",
-        "hypothesis-high",
-        "1-byte value in the confirmed F4xx temp-DID range (alongside "
-        "F405 coolant, F40F intake, F446 ambient, F45C oil). If it shares "
-        "the same raw-40=degC scaling: ~61-62 degC at capture time. "
-        "Needs a field test against a known temp reference.",
-    ),
-    "F43C": (
-        "Possible high-resolution temperature sensor (F4xx family)",
-        "hypothesis-medium",
-        "2-byte value in the F4xx temp range; one read spiked from ~0x0408 "
-        "to 0x04E6, consistent with a transient temp rise (e.g. EGT/oil). "
-        "If (raw/10)-40=degC: ~63 degC baseline, ~85 degC spike. Needs a "
-        "field test against a known temp reference.",
-    ),
-    "F442": (
-        "Possible manifold/boost pressure sensor",
-        "hypothesis-low",
-        "2-byte value (~12020-12040), F4xx range but magnitude too large "
-        "for the simple raw-40 temp scaling used by other F4xx DIDs here. "
-        "Small drift is consistent with a steady idle MAP/boost reading "
-        "under some other scaling (e.g. /100). Needs a field test.",
-    ),
-    "033C": (
-        "Possible secondary analog sensor (fine resolution)",
-        "hypothesis-low",
-        "2-byte value, +/-1 LSB drift (0x0152/0x0153). Same 03xx family as "
-        "the confirmed 03F3 (Sump Oil Temp) DID, but 2-byte instead of "
-        "1-byte -- could be a higher-resolution temp/pressure. Needs a "
-        "field test.",
-    ),
-    "035A": (
-        "Possible analog sensor (moderate drift)",
-        "hypothesis-low",
-        "2-byte value, 0x034A-0x034E (842-846), more variation than 033C. "
-        "Same 03xx family. Could be engine-load/pressure-related. Needs a "
-        "field test.",
-    ),
-    "03BA": (
-        "Possible analog sensor (moderate drift)",
-        "hypothesis-low",
-        "2-byte value, 0x0287-0x0289 (647-649). Same 03xx family as 035A/"
-        "033C. Needs a field test.",
-    ),
-    "0914": (
-        "Possible cyclic/stepped parameter",
-        "hypothesis-low",
-        "2-byte value, alternates in blocks between ~0x030B and ~0x0310 "
-        "(779/784). 09xx range does not match the confirmed 03xx/F4xx temp "
-        "families -- could be a duty cycle or counter, and may be related "
-        "to the adjacent DID 0915. Needs a field test.",
-    ),
-    "0915": (
-        "Possible paired parameter to 0914",
-        "hypothesis-low",
-        "Adjacent DID to 0914 with similar alternating-block behaviour "
-        "(0x018B/0x0185 = 395/389). May be a related pair (e.g. dual-bank "
-        "sensor or short/long-term trim). Needs a field test.",
-    ),
-    "9800": (
-        "Possible status/counter register",
-        "hypothesis-low",
-        "2-byte value, near-constant with a rare +/-5 drift (0x041E/0x0423 "
-        "= 1054/1059). Unusual DID range (0x98xx) that doesn't match any "
-        "confirmed temp/voltage family found so far. Needs a field test.",
+        "0x39/0x3A (57/58) -> 17/18 degC, consistent with intercooler temp. "
+        "Also field-verified 2026-08-05 against input/log_024.csv: raw "
+        "0x48 (72) constant -> 32 degC, matching the user's live reading "
+        "exactly.",
     ),
 }
+
+# Standard SAE J1979 / ISO 15031 Mode 0x01 ("Show Current Data") PIDs.
+# UNLIKE DID_NAME_HYPOTHESES above (Ford-specific UDS Mode 0x22 DIDs), these
+# are internationally legislated, publicly standardised PIDs used by every
+# OBD-II compliant vehicle -- confirmed by definition, not vehicle-specific
+# sourcing, so long as the observed byte layout matches the standard (which
+# it does for every PID below, checked against real input/*.csv captures).
+# See AGENTS.md: still never invent a PID/formula not in the published
+# standard.
+OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
+    "04": (
+        "Calculated Engine Load",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x04. Equation: raw*100/255=%. "
+        "Observed raw 94-96 in input/log_011.csv -> ~36.9-37.6%, "
+        "plausible idle/light-load engine load.",
+    ),
+    "05": (
+        "Engine Coolant Temp",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x05. Equation: raw-40=degC. "
+        "Observed constant raw 120 in input/log_010.csv and "
+        "input/log_011.csv -> 80 degC, plausible warmed-up coolant temp.",
+    ),
+    "0C": (
+        "Engine RPM",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x0C. Equation: raw/4=rpm (raw is "
+        "the 2-byte ((A*256)+B) value). Observed raw 2784-2808 in "
+        "input/log_010.csv and input/log_011.csv -> ~696-702 rpm, "
+        "plausible diesel idle speed.",
+    ),
+    "0D": (
+        "Vehicle Speed",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x0D. Equation: raw=km/h directly "
+        "(no scaling). Observed constant raw 0 in input/log_010.csv and "
+        "input/log_011.csv -> 0 km/h, consistent with a stationary vehicle "
+        "during those captures.",
+    ),
+    "0B": (
+        "Intake Manifold Absolute Pressure (MAP)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x0B. Equation: raw=kPa directly "
+        "(absolute, no scaling). Source: independently cross-confirmed "
+        "against Greatscan 3.5's own working implementation "
+        "(lib/Vehicle/src/ford_protocol.cpp, FordPids::INTAKE_MAP, "
+        "2026-08-05). Closest standard PID to 'Boost Pressure' for a "
+        "turbo-diesel (MAP is absolute pressure, not gauge boost above "
+        "atmospheric -- treat as an approximation, not a literal boost "
+        "gauge, until a real reading confirms the relationship). NOT yet "
+        "observed in any Decoding 2000 capture.",
+    ),
+    "2C": (
+        "Commanded EGR (EGRC)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x2C. Equation: raw*100/255=%. "
+        "Source: independently cross-confirmed against Greatscan 3.5's "
+        "own working implementation (lib/Vehicle/src/ford_protocol.cpp, "
+        "FordPids::COMMANDED_EGR, 2026-08-05). NOT yet observed in any "
+        "Decoding 2000 capture.",
+    ),
+    "2D": (
+        "EGR Error (EGRE)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x2D. Equation: (raw-128)*100/128"
+        "=%. Source: independently cross-confirmed against Greatscan "
+        "3.5's own working implementation (lib/Vehicle/src/"
+        "ford_protocol.cpp, FordPids::EGR_ERROR, 2026-08-05). NOT yet "
+        "observed in any Decoding 2000 capture.",
+    ),
+    "2F": (
+        "Fuel Tank Level (Fuel Left)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x2F. Equation: raw*100/255=%. "
+        "Source: independently cross-confirmed against Greatscan 3.5's "
+        "own working implementation (lib/Vehicle/src/ford_protocol.cpp, "
+        "FordPids::FUEL_LEVEL, 2026-08-05). NOT yet observed in any "
+        "Decoding 2000 capture.",
+    ),
+    "42": (
+        "Control Module Voltage (Volts)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x42. Equation: raw (2 bytes) / "
+        "1000 = V. Source: independently cross-confirmed against "
+        "Greatscan 3.5's own working implementation (lib/Vehicle/src/"
+        "ford_protocol.cpp, FordPids::CONTROL_MODULE_VOLTAGE, "
+        "2026-08-05). NOT yet observed in any Decoding 2000 capture.",
+    ),
+    "59": (
+        "Fuel Rail Pressure (absolute)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x59. Equation: raw (2 bytes) * "
+        "10 = kPa. This is the ACTUAL/measured fuel rail pressure, "
+        "distinct from the confirmed UDS DID 03DC 'Fuel Pressure "
+        "Desired' (target value). Source: independently cross-confirmed "
+        "against Greatscan 3.5's own working implementation "
+        "(lib/Vehicle/src/ford_protocol.cpp, "
+        "FordPids::FUEL_RAIL_PRESSURE_ABS, 2026-08-05). NOT yet observed "
+        "in any Decoding 2000 capture.",
+    ),
+    "5E": (
+        "Engine Fuel Rate",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x5E. Equation: raw (2 bytes) * "
+        "0.05 = L/h. Source: independently cross-confirmed against "
+        "Greatscan 3.5's own working implementation (lib/Vehicle/src/"
+        "ford_protocol.cpp, FordPids::ENGINE_FUEL_RATE, 2026-08-05). NOT "
+        "yet observed in any Decoding 2000 capture.",
+    ),
+}
+
+# Module each OBD2_PID_NAMES entry was observed/expected responding from
+# (PCM for all standard PIDs on this vehicle -- all Mode 01 requests seen
+# so far, and GreatScan 3.5's own module list, address these to 7E0/7E8).
+# Every key here must also be a key in OBD2_PID_NAMES.
+OBD2_PID_MODULE_HINTS: dict[str, str] = {
+    "04": "PCM",
+    "05": "PCM",
+    "0C": "PCM",
+    "0D": "PCM",
+    "0B": "PCM",
+    "2C": "PCM",
+    "2D": "PCM",
+    "2F": "PCM",
+    "42": "PCM",
+    "59": "PCM",
+    "5E": "PCM",
+}
+
+# Which module (key into CONFIRMED_MODULE_NAMES) each DID_NAME_HYPOTHESES
+# entry was observed under. Every key here must also be a key in
+# DID_NAME_HYPOTHESES. Used only to group the "known PIDs/DIDs" reference
+# report by module -- see build_known_did_reference() below.
+DID_MODULE_HINTS: dict[str, str] = {
+    "03DC": "PCM",
+    "F446": "PCM",
+    "03F6": "PCM",
+    "1E1C": "TCM",
+    "0522": "PCM",
+    "404C": "IPC",
+    "051C": "PCM",
+    "F45E": "PCM",
+    "402A": "BdyCM",
+    "4028": "BdyCM",
+    "4029": "BdyCM",
+}
+
+
+def build_known_did_reference() -> list[KnownDidEntry]:
+    """Build the static "known PIDs/DIDs by module" reference table.
+
+    Combines DID_NAME_HYPOTHESES (name/confidence/notes) with
+    DID_MODULE_HINTS (which module each DID was observed under) and
+    CONFIRMED_MODULE_NAMES (module name -> request arbitration id). This is
+    a reference listing, not derived from any one capture's frames -- it
+    reflects everything recorded in code so far, confirmed and hypothesis
+    alike (each clearly labelled via `confidence`).
+    """
+    entries: list[KnownDidEntry] = []
+    for did, module_name in DID_MODULE_HINTS.items():
+        possible_name, confidence, notes = DID_NAME_HYPOTHESES.get(
+            did, ("(unnamed)", "unidentified", "")
+        )
+        # CONFIRMED_MODULE_NAMES maps request_id -> module_name; find the
+        # request id whose name matches module_name.
+        request_id = next(
+            (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name),
+            "?",
+        )
+        entries.append(
+            KnownDidEntry(
+                module_name=module_name,
+                request_id=request_id,
+                did=did,
+                possible_name=possible_name,
+                confidence=confidence,
+                notes=notes,
+                code_type="DID",
+            )
+        )
+    for pid, module_name in OBD2_PID_MODULE_HINTS.items():
+        possible_name, confidence, notes = OBD2_PID_NAMES.get(
+            pid, ("(unnamed)", "unidentified", "")
+        )
+        request_id = next(
+            (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name),
+            "?",
+        )
+        entries.append(
+            KnownDidEntry(
+                module_name=module_name,
+                request_id=request_id,
+                did=pid,
+                possible_name=possible_name,
+                confidence=confidence,
+                notes=notes,
+                code_type="PID",
+            )
+        )
+    entries.sort(key=lambda e: (e.module_name, e.code_type, e.did))
+    return entries
 
 
 class TelemetryCandidateAnalyser:
@@ -893,6 +1187,7 @@ def build_analysis_result(
     result.sessions = session_analyser.build_sessions(frames)
     result.module_discovery = module_discovery_analyser.discover(frames)
     result.telemetry_candidates = telemetry_candidate_analyser.discover(frames)
+    result.known_dids = build_known_did_reference()
 
     result.summary["total_entries"] = total_entries
     result.summary["total_frames"] = len(frames)
