@@ -164,6 +164,21 @@ class FrameParser:
                 col.strip() for col in row
             )
             mode, pgn, sa = None, None, None
+        elif len(row) == 9:
+            (
+                ms_str,
+                bus,
+                id_hex,
+                ext_str,
+                rtr_str,
+                dlc_str,
+                pgn,
+                sa,
+                data_hex,
+            ) = (col.strip() for col in row)
+            mode = None
+            pgn = None if pgn in (None, "", "-") else pgn
+            sa = None if sa in (None, "", "-") else sa
         elif len(row) == 10:
             (
                 ms_str,
@@ -181,7 +196,7 @@ class FrameParser:
             pgn = None if pgn in (None, "", "-") else pgn
             sa = None if sa in (None, "", "-") else sa
         else:
-            raise ValueError(f"expected 7 or 10 columns, got {len(row)}: {row!r}")
+            raise ValueError(f"expected 7, 9, or 10 columns, got {len(row)}: {row!r}")
 
         ms = int(ms_str)
         dlc = int(dlc_str)
@@ -861,7 +876,7 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "~86.7-87.4 degC, confirmed correct against a live reading.",
     ),
     "03F6": (
-        "Exhaust Temp",
+        "Exhaust Gas Temp 12 (EGT12)",
         "confirmed",
         "Module PCM (7E0 request -> 7E8 response). 1-byte value. Equation: "
         "raw*5=degC. User field reading (2026-08-05, input/log_021.csv): "
@@ -871,7 +886,27 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "115degC, log_012 raw 56-57->280-285degC, log_013 raw 59-76-> "
         "295-380degC -- a single continuous, physically plausible "
         "cold-to-full-load exhaust temp progression across 5 independent "
-        "capture sessions, all fitting raw*5=degC with no exceptions.",
+        "capture sessions, all fitting raw*5=degC with no exceptions. "
+        "Renamed from generic 'Exhaust Temp' to 'EGT12' 2026-08-06: user "
+        "confirmed a live 'EGT12' scan-tool reading of 115-120 degC, "
+        "exactly matching this DID's already-observed raw 23/24 "
+        "(23*5=115, 24*5=120) from input/log_024.csv -- resolves the "
+        "earlier open question (saeb.net research, 2026-08-05) of which "
+        "specific EGT probe location this DID represents.",
+    ),
+    "03F5": (
+        "Exhaust Gas Temp 13 (EGT13)",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). 1-byte value. Equation: "
+        "raw*5=degC (same formula/family as confirmed EGT12 03F6). "
+        "User-confirmed 2026-08-06 as EGT13, captured alongside EGT12 in "
+        "input/log_012.csv, log_013.csv and log_024.csv -- 03F5 tracks "
+        "03F6 almost exactly in every one of those logs, consistently "
+        "1-5 raw units higher (a few degrees hotter), matching adjacent "
+        "EGT sensor positions on the same exhaust bank: log_012 03F5 "
+        "58-62 vs 03F6 56-57, log_013 03F5 61-76 vs 03F6 59-76, log_024 "
+        "03F5 24-25 vs 03F6 23. Also present alone (no 03F6) in "
+        "input/log_035.csv, raw 23-25 -> 115-125degC.",
     ),
     "051C": (
         "Air Charge Temp (Intercooler) [ACT]",
@@ -882,6 +917,28 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "Also field-verified 2026-08-05 against input/log_024.csv: raw "
         "0x48 (72) constant -> 32 degC, matching the user's live reading "
         "exactly.",
+    ),
+    "9938": (
+        "Blower Motor Speed",
+        "confirmed",
+        "Module FCIM (7A7 request -> 7AF response). 1-byte value, "
+        "raw=% directly (no scaling). User field-verified 2026-08-06 "
+        "(input/log_034.csv): manually turning the rotary blower speed "
+        "dial produced a smooth ramp from raw 0x16 (22) baseline up to "
+        "raw 0x52 (82) and back, exactly matching the user's live "
+        "reading of the blower cycling 22-82%. The smooth multi-step "
+        "ramp (not an instant jump) is expected behaviour for a "
+        "hand-turned rotary dial.",
+    ),
+    "9B03": (
+        "Heater Temperature (Blend Door Position)",
+        "confirmed",
+        "Module FCIM (7A7 request -> 7AF response). 1-byte value, "
+        "raw=% directly (no scaling). User field-verified 2026-08-06 "
+        "(input/log_034.csv): manually turning the rotary heater temp "
+        "dial produced a smooth sweep from raw 0x62 (98) baseline down "
+        "to raw 4 and back up to raw 99, matching the user's live "
+        "reading of the heater cycling 0-99%.",
     ),
 }
 
@@ -1022,6 +1079,7 @@ DID_MODULE_HINTS: dict[str, str] = {
     "03DC": "PCM",
     "F446": "PCM",
     "03F6": "PCM",
+    "03F5": "PCM",
     "1E1C": "TCM",
     "0522": "PCM",
     "404C": "IPC",
@@ -1030,6 +1088,8 @@ DID_MODULE_HINTS: dict[str, str] = {
     "402A": "BdyCM",
     "4028": "BdyCM",
     "4029": "BdyCM",
+    "9938": "FCIM",
+    "9B03": "FCIM",
 }
 
 

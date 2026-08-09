@@ -19,6 +19,11 @@ CSV_HEADER = "ms,bus,id_hex,ext,rtr,dlc,data_hex"
 # Also skipped on read; FrameParser handles both column layouts.
 CSV_HEADER_EXTENDED = "ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
 
+# Variant of the extended header seen in input/log_038-040.csv (2026-08-09)
+# that adds J1939-style `pgn`/`sa` columns but omits `mode` (9 columns, not
+# 10). FrameParser treats `mode` as None for rows in this layout.
+CSV_HEADER_EXTENDED_NO_MODE = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
+
 
 def find_log_files(input_dir: Path, pattern: str = "*.csv") -> list[Path]:
     """Return all log files in `input_dir` matching `pattern`, sorted by name."""
@@ -34,7 +39,11 @@ def read_log_file(path: Path) -> list[RawLogEntry]:
             if not text:
                 continue
             header_text = text.strip().lower()
-            if line_number == 1 and header_text in (CSV_HEADER, CSV_HEADER_EXTENDED):
+            if line_number == 1 and header_text in (
+                CSV_HEADER,
+                CSV_HEADER_EXTENDED,
+                CSV_HEADER_EXTENDED_NO_MODE,
+            ):
                 continue
             entries.append(
                 RawLogEntry(
