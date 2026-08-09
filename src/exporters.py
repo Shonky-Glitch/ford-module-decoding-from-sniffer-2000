@@ -191,6 +191,7 @@ def export_telemetry_candidates_csv(result: AnalysisResult, output_path: Path) -
                 "sample_values",
                 "possible_name",
                 "confidence",
+                "observed_pattern",
                 "notes",
             ]
         )
@@ -206,6 +207,7 @@ def export_telemetry_candidates_csv(result: AnalysisResult, output_path: Path) -
                     "; ".join(entry.sample_values),
                     entry.possible_name or "",
                     entry.confidence,
+                    entry.observed_pattern,
                     entry.notes,
                 ]
             )

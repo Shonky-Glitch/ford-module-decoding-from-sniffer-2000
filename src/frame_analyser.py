@@ -131,14 +131,25 @@ CANDIDATE_MODULE_NAMES: dict[str, str] = {
 class FrameParser:
     """Turns a single raw CSV log entry into a Frame.
 
-    Two real CAN Sniffer 2000 capture formats have been observed (verified
-    against input/log_*.csv):
+    Formats observed so far (verified against real input/*.csv captures):
         7 columns:  ms,bus,id_hex,ext,rtr,dlc,data_hex        (log_001-020)
         10 columns: ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex
                     (log_021 onward, 2026-08-05) -- adds `mode` (e.g.
                     "Listen-Only") and J1939-style `pgn`/`sa` columns, both
                     stored on the Frame but not yet interpreted (`pgn`/`sa`
                     were always "-" in every capture seen so far).
+        9 columns:  ms,bus,id_hex,ext,rtr,dlc,pgn,sa,data_hex (log_038-040,
+                    2026-08-09) -- same as the 10-column layout but omits
+                    `mode` entirely.
+        10 columns (BMW): ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex
+                    (input/bmw/log_001.csv, 2026-08-10) -- no `mode`; adds a
+                    `protocol` column (e.g. "STD_OBD") right before
+                    `data_hex` instead, stored on the Frame but not yet
+                    interpreted. Same column COUNT as the log_021-style
+                    10-column layout but different meaning/order, so the
+                    two are disambiguated via RawLogEntry.column_layout
+                    (set from the file's actual header row in
+                    log_reader.py), not column count alone.
 
     `data_hex` is dash-separated CAN payload bytes. Byte 0 is decoded as an
     ISO 15765-2 (ISO-TP) PCI byte, and single-frame UDS payloads are further
@@ -159,6 +170,7 @@ class FrameParser:
         except Exception as exc:  # noqa: BLE001 - surfaced as a parse error
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
+        protocol: str | None = None
         if len(row) == 7:
             ms_str, bus, id_hex, ext_str, rtr_str, dlc_str, data_hex = (
                 col.strip() for col in row
@@ -179,6 +191,23 @@ class FrameParser:
             mode = None
             pgn = None if pgn in (None, "", "-") else pgn
             sa = None if sa in (None, "", "-") else sa
+        elif len(row) == 10 and entry.column_layout == "10col_protocol":
+            (
+                ms_str,
+                bus,
+                id_hex,
+                ext_str,
+                rtr_str,
+                dlc_str,
+                pgn,
+                sa,
+                protocol,
+                data_hex,
+            ) = (col.strip() for col in row)
+            mode = None
+            pgn = None if pgn in (None, "", "-") else pgn
+            sa = None if sa in (None, "", "-") else sa
+            protocol = protocol or None
         elif len(row) == 10:
             (
                 ms_str,
@@ -197,6 +226,7 @@ class FrameParser:
             sa = None if sa in (None, "", "-") else sa
         else:
             raise ValueError(f"expected 7, 9, or 10 columns, got {len(row)}: {row!r}")
+
 
         ms = int(ms_str)
         dlc = int(dlc_str)
@@ -235,6 +265,7 @@ class FrameParser:
                 "mode": mode,
                 "pgn": pgn,
                 "sa": sa,
+                "protocol": protocol,
                 "ext": bool(int(ext_str)),
                 "rtr": bool(int(rtr_str)),
                 "dlc": dlc,
@@ -803,6 +834,43 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "polling session, 169 reads): raw 0x3E/0x3F (62/63) -> 22/23 "
         "degC, exactly matching the user's live reading.",
     ),
+    "F405": (
+        "Coolant Temp",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Source: saeb.net Ford "
+        "Ranger PX2/Everest community PID list (module 7E0, mode 22, "
+        "same raw-40=degC temp-DID family as confirmed F446/0522). "
+        "Equation: raw-40=degC. First observed present 2026-08-10 across "
+        "the full input/ corpus: raw range 0x36-0x7F (54-127) -> "
+        "14-87 degC, a physically plausible cold-to-warm coolant temp "
+        "range. Not yet independently field-verified with a live "
+        "reading.",
+    ),
+    "F40F": (
+        "Intake Air Temp",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Source: saeb.net Ford "
+        "Ranger PX2/Everest community PID list (module 7E0, mode 22, "
+        "same raw-40=degC temp-DID family as confirmed F446/0522). "
+        "Equation: raw-40=degC. First observed present 2026-08-10: raw "
+        "0x3C/0x45 (60/69) -> 20/29 degC, a plausible intake air temp "
+        "reading. Not yet independently field-verified with a live "
+        "reading.",
+    ),
+    "DD05": (
+        "Outside/Ambient Air Temp",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Source: saeb.net Ford "
+        "Ranger PX2/Everest community PID list (module 7E0, mode 22, "
+        "same raw-40=degC temp-DID family as confirmed F446/0522). "
+        "Equation: raw-40=degC. NOTE: distinct from the already-confirmed "
+        "F446 'Ambient Air Temp' -- saeb.net lists both as separate DIDs "
+        "(the vehicle may expose the same/similar signal via two "
+        "addresses, same pattern as F45E vs standard PID 0x5E). First "
+        "observed present 2026-08-10: raw 0x38/0x3C (56/60) -> 16/20 "
+        "degC, plausible ambient temp. Not yet independently field-"
+        "verified with a live reading.",
+    ),
     "0522": (
         "Fuel Temp",
         "confirmed",
@@ -1090,6 +1158,9 @@ DID_MODULE_HINTS: dict[str, str] = {
     "4029": "BdyCM",
     "9938": "FCIM",
     "9B03": "FCIM",
+    "F405": "PCM",
+    "F40F": "PCM",
+    "DD05": "PCM",
 }
 
 
@@ -1146,6 +1217,53 @@ def build_known_did_reference() -> list[KnownDidEntry]:
         )
     entries.sort(key=lambda e: (e.module_name, e.code_type, e.did))
     return entries
+
+
+def _classify_observed_pattern(ordered_values: list[bytes]) -> str:
+    """Classify how a DID's raw byte value moves, purely from the observed
+    values themselves -- NOT a claim about what the DID means.
+
+    Returns one of:
+      "On/Off switch"       -- exactly 2 distinct values, differing by 1 bit
+      "Bitfield / multi-switch" -- few distinct values, all differing from
+                                   the most common value by only a handful
+                                   of bits (discrete states/flags)
+      "Ramp / counter"       -- distinct values trend consistently in one
+                                direction over time (monotonic, allowing
+                                repeats)
+      "Sensor (varies)"      -- fallback: many/irregular distinct values
+                                with no bitfield or monotonic pattern
+    """
+    ints = [int.from_bytes(v, "big") for v in ordered_values]
+    distinct = sorted(set(ints))
+
+    if len(distinct) == 2:
+        hamming = bin(distinct[0] ^ distinct[1]).count("1")
+        if hamming == 1:
+            return "On/Off switch"
+        return "Bitfield / multi-switch"
+
+    # Discrete-state check: XOR every distinct value against the most
+    # common ("baseline"/idle) value; if the combined set of bits that ever
+    # toggle is small, this looks like a handful of flags/states rather
+    # than a continuously varying analog reading.
+    baseline = max(set(ints), key=ints.count)
+    active_bits_mask = 0
+    for v in distinct:
+        active_bits_mask |= v ^ baseline
+    if bin(active_bits_mask).count("1") <= 3 and len(distinct) <= 8:
+        return "Bitfield / multi-switch"
+
+    # Ramp/counter check: does the sequence trend consistently in one
+    # direction over time (ignoring exact repeats between reads)?
+    diffs = [b - a for a, b in zip(ints, ints[1:]) if b != a]
+    if diffs:
+        positive = sum(1 for d in diffs if d > 0)
+        negative = sum(1 for d in diffs if d < 0)
+        if positive == 0 or negative == 0:
+            return "Ramp / counter"
+
+    return "Sensor (varies)"
 
 
 class TelemetryCandidateAnalyser:
@@ -1205,6 +1323,10 @@ class TelemetryCandidateAnalyser:
             possible_name, confidence, notes = self._name_hypotheses.get(
                 did, (None, "unidentified", "")
             )
+            ordered = [
+                bytes.fromhex(v.replace(" ", ""))
+                for _, v in sorted(values, key=lambda tv: (tv[0] is None, tv[0]))
+            ]
             entries.append(
                 TelemetryCandidateEntry(
                     arbitration_id=arb_id,
@@ -1217,6 +1339,7 @@ class TelemetryCandidateAnalyser:
                     possible_name=possible_name,
                     confidence=confidence,
                     notes=notes,
+                    observed_pattern=_classify_observed_pattern(ordered),
                 )
             )
 

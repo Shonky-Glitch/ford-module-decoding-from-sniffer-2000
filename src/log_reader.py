@@ -24,6 +24,28 @@ CSV_HEADER_EXTENDED = "ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
 # 10). FrameParser treats `mode` as None for rows in this layout.
 CSV_HEADER_EXTENDED_NO_MODE = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
 
+# Header seen in the first BMW capture (input/bmw/log_001.csv, imported
+# 2026-08-10, approved same day). Also 10 columns like CSV_HEADER_EXTENDED,
+# but structurally different: no `mode` column; instead adds a `protocol`
+# column (e.g. "STD_OBD") right before `data_hex`. `pgn`/`sa` are always "-"
+# in this capture, same as the other extended layouts.
+CSV_HEADER_BMW_PROTOCOL = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex"
+
+# Tags stored on RawLogEntry.column_layout so FrameParser can disambiguate
+# column layouts that share the same column COUNT but different meaning
+# (CSV_HEADER_EXTENDED vs CSV_HEADER_BMW_PROTOCOL are both 10 columns).
+COLUMN_LAYOUT_7 = "7col"
+COLUMN_LAYOUT_9_NO_MODE = "9col_no_mode"
+COLUMN_LAYOUT_10_MODE = "10col_mode"
+COLUMN_LAYOUT_10_PROTOCOL = "10col_protocol"
+
+_HEADER_TO_LAYOUT = {
+    CSV_HEADER: COLUMN_LAYOUT_7,
+    CSV_HEADER_EXTENDED: COLUMN_LAYOUT_10_MODE,
+    CSV_HEADER_EXTENDED_NO_MODE: COLUMN_LAYOUT_9_NO_MODE,
+    CSV_HEADER_BMW_PROTOCOL: COLUMN_LAYOUT_10_PROTOCOL,
+}
+
 
 def find_log_files(input_dir: Path, pattern: str = "*.csv") -> list[Path]:
     """Return all log files in `input_dir` matching `pattern`, sorted by name."""
@@ -33,23 +55,22 @@ def find_log_files(input_dir: Path, pattern: str = "*.csv") -> list[Path]:
 def read_log_file(path: Path) -> list[RawLogEntry]:
     """Read a single log file into a list of RawLogEntry records."""
     entries: list[RawLogEntry] = []
+    column_layout: str | None = None
     with path.open("r", encoding="utf-8", errors="replace") as f:
         for line_number, line in enumerate(f, start=1):
             text = line.rstrip("\n\r")
             if not text:
                 continue
             header_text = text.strip().lower()
-            if line_number == 1 and header_text in (
-                CSV_HEADER,
-                CSV_HEADER_EXTENDED,
-                CSV_HEADER_EXTENDED_NO_MODE,
-            ):
+            if line_number == 1 and header_text in _HEADER_TO_LAYOUT:
+                column_layout = _HEADER_TO_LAYOUT[header_text]
                 continue
             entries.append(
                 RawLogEntry(
                     line_number=line_number,
                     raw_text=text,
                     source_file=str(path),
+                    column_layout=column_layout,
                 )
             )
     return entries

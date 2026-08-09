@@ -22,8 +22,8 @@ from frame_analyser import AnalysisResult, Frame, build_analysis_result, analyse
 from log_reader import RawLogEntry, read_all_logs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_INPUT_DIR = REPO_ROOT / "input"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "output"
+DEFAULT_INPUT_DIR = REPO_ROOT / "input" / "ford"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "output" / "ford"
 
 # Source-log stems (filename without extension) that have been identified as
 # useful diagnostic references for building the future GreatScan 3.5
@@ -40,13 +40,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--input-dir",
         type=Path,
         default=DEFAULT_INPUT_DIR,
-        help="Directory containing raw log files (default: input/)",
+        help="Directory containing raw log files (default: input/ford/)",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory to write decoded output to (default: output/)",
+        help="Directory to write decoded output to (default: output/ford/)",
     )
     parser.add_argument(
         "--pattern",

@@ -17,6 +17,11 @@ class RawLogEntry:
     line_number: int
     raw_text: str
     source_file: str
+    # Which known CSV header layout this entry's file was detected under
+    # (see log_reader.py's CSV_HEADER* constants / COLUMN_LAYOUT_* tags).
+    # None means no recognised header was found for this file (legacy
+    # behaviour: FrameParser falls back to column-count alone).
+    column_layout: str | None = None
 
 
 @dataclass
@@ -95,6 +100,10 @@ class TelemetryCandidateEntry:
     hypothesis (from public reference lookups or byte-pattern reasoning) for
     a human to field-test -- never treat these as confirmed without an
     actual correlation test. See AGENTS.md: never guess packet meaning.
+    `observed_pattern` is a purely shape-based classification of how the
+    raw value moves (e.g. "On/Off switch", "Bitfield / multi-switch",
+    "Ramp / counter", "Sensor (varies)") derived only from the byte values
+    themselves -- it is NOT a claim about what the DID represents.
     """
 
     arbitration_id: str
@@ -107,6 +116,7 @@ class TelemetryCandidateEntry:
     possible_name: str | None = None
     confidence: str = "unidentified"
     notes: str = ""
+    observed_pattern: str = ""
 
 
 @dataclass
@@ -146,3 +156,73 @@ class AnalysisResult:
     known_dids: list[KnownDidEntry] = field(default_factory=list)
     summary: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BmwFrame:
+    """A minimally-parsed BMW capture frame.
+
+    Deliberately NOT a Frame: BMW's diagnostic addressing/protocol has not
+    been confirmed for this project (see reference/bmw_ecu_reference.md), so
+    this holds only the raw fields read off the CSV row -- no ISO-TP/UDS
+    interpretation, no module-name/DID lookups. See AGENTS.md: never guess
+    the input file format / packet meaning.
+    """
+
+    frame_id: str
+    timestamp_ms: int
+    bus: str
+    protocol: str | None
+    dlc: int
+    payload: bytes
+    source: RawLogEntry | None = None
+
+
+@dataclass
+class BmwCanIdCycleStats:
+    """Traffic + cycle-time statistics for one BMW CAN identifier.
+
+    `median_interval_ms` (and min/max) describe the time between
+    consecutive frames of this id -- a low, consistent interval suggests a
+    periodic broadcast signal; a None/absent value means only one frame was
+    seen. Purely descriptive, not a meaning guess.
+    """
+
+    frame_id: str
+    count: int
+    first_seen_ms: int | None
+    last_seen_ms: int | None
+    min_dlc: int | None
+    max_dlc: int | None
+    median_interval_ms: float | None
+    min_interval_ms: int | None
+    max_interval_ms: int | None
+
+
+@dataclass
+class BmwByteVariability:
+    """Per-byte-offset variability for one BMW CAN identifier.
+
+    A shape/triage hint only (which byte positions change vs stay
+    constant across the capture) -- NOT a meaning/name guess. See
+    AGENTS.md: never guess PID/DID meaning.
+    """
+
+    frame_id: str
+    byte_offset: int
+    distinct_value_count: int
+    min_value: int
+    max_value: int
+    always_constant: bool
+
+
+@dataclass
+class BmwAnalysisResult:
+    """The result of analysing a collection of BMW capture frames."""
+
+    frames: list[BmwFrame] = field(default_factory=list)
+    canid_stats: dict[str, BmwCanIdCycleStats] = field(default_factory=dict)
+    byte_variability: list[BmwByteVariability] = field(default_factory=list)
+    summary: dict[str, object] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
