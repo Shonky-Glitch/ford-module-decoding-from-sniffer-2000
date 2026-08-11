@@ -234,6 +234,8 @@ def export_known_pids_csv(result: AnalysisResult, output_path: Path) -> None:
                 "did",
                 "possible_name",
                 "confidence",
+                "formula",
+                "unit",
                 "notes",
             ]
         )
@@ -246,6 +248,8 @@ def export_known_pids_csv(result: AnalysisResult, output_path: Path) -> None:
                     entry.did,
                     entry.possible_name,
                     entry.confidence,
+                    entry.formula,
+                    entry.unit,
                     entry.notes,
                 ]
             )

@@ -19,6 +19,7 @@ from models import (
     BmwByteVariability,
     BmwCanIdCycleStats,
     BmwFrame,
+    BmwTelemetryCandidateEntry,
     RawLogEntry,
 )
 
@@ -147,6 +148,53 @@ class BmwStatisticsEngine:
         return stats
 
 
+def _classify_observed_pattern(ordered_values: list[int]) -> str:
+    """Classify how a single byte offset's value moves over time, purely
+    from the observed values themselves -- NOT a claim about what the byte
+    means. Mirrors frame_analyser.py's _classify_observed_pattern (kept as
+    a separate copy here, not imported, to preserve the Ford/BMW module
+    separation described at the top of this file).
+
+    Returns one of:
+      "Constant"             -- only one value ever seen (always_constant)
+      "On/Off switch"       -- exactly 2 distinct values, differing by 1 bit
+      "Bitfield / multi-switch" -- few distinct values, all differing from
+                                   the most common value by only a handful
+                                   of bits (discrete states/flags)
+      "Ramp / counter"       -- distinct values trend consistently in one
+                                direction over time (monotonic, allowing
+                                repeats)
+      "Sensor (varies)"      -- fallback: many/irregular distinct values
+                                with no bitfield or monotonic pattern
+    """
+    distinct = sorted(set(ordered_values))
+
+    if len(distinct) == 1:
+        return "Constant"
+
+    if len(distinct) == 2:
+        hamming = bin(distinct[0] ^ distinct[1]).count("1")
+        if hamming == 1:
+            return "On/Off switch"
+        return "Bitfield / multi-switch"
+
+    baseline = max(set(ordered_values), key=ordered_values.count)
+    active_bits_mask = 0
+    for v in distinct:
+        active_bits_mask |= v ^ baseline
+    if bin(active_bits_mask).count("1") <= 3 and len(distinct) <= 8:
+        return "Bitfield / multi-switch"
+
+    diffs = [b - a for a, b in zip(ordered_values, ordered_values[1:]) if b != a]
+    if diffs:
+        positive = sum(1 for d in diffs if d > 0)
+        negative = sum(1 for d in diffs if d < 0)
+        if positive == 0 or negative == 0:
+            return "Ramp / counter"
+
+    return "Sensor (varies)"
+
+
 class ByteVariabilityAnalyser:
     """Per-byte-offset distinct-value counts for each CAN ID.
 
@@ -162,6 +210,7 @@ class ByteVariabilityAnalyser:
 
         results: list[BmwByteVariability] = []
         for frame_id, id_frames in sorted(by_id.items()):
+            id_frames = sorted(id_frames, key=lambda f: f.timestamp_ms)
             max_len = max((len(f.payload) for f in id_frames), default=0)
             for offset in range(max_len):
                 values = [
@@ -178,9 +227,61 @@ class ByteVariabilityAnalyser:
                         min_value=min(values),
                         max_value=max(values),
                         always_constant=len(distinct) == 1,
+                        observed_pattern=_classify_observed_pattern(values),
                     )
                 )
         return results
+
+
+class BmwTelemetryCandidateAnalyser:
+    """Flags (CAN id, byte offset) pairs worth polling for a live gauge/
+    telemetry display -- mirrors frame_analyser.py's
+    TelemetryCandidateAnalyser structurally, for output/report parity with
+    the Ford pipeline, but with no DID/service framing (BMW frames are
+    plain broadcast traffic, not request/response) and no name/formula
+    guessed. A byte offset is flagged only when it took more than one
+    value across the capture -- purely observed behaviour, not an
+    assumption about which bytes carry live data.
+    """
+
+    def discover(self, frames: list[BmwFrame]) -> list[BmwTelemetryCandidateEntry]:
+        by_id: dict[str, list[BmwFrame]] = {}
+        for frame in frames:
+            by_id.setdefault(frame.frame_id, []).append(frame)
+
+        entries: list[BmwTelemetryCandidateEntry] = []
+        for frame_id, id_frames in by_id.items():
+            id_frames = sorted(id_frames, key=lambda f: f.timestamp_ms)
+            max_len = max((len(f.payload) for f in id_frames), default=0)
+            for offset in range(max_len):
+                reads = [
+                    (f.timestamp_ms, f.payload[offset])
+                    for f in id_frames
+                    if len(f.payload) > offset
+                ]
+                if not reads:
+                    continue
+                values = [v for _, v in reads]
+                distinct = set(values)
+                if len(reads) < 2 or len(distinct) < 2:
+                    continue  # read once, or never changed -- not a candidate
+
+                timestamps = [ts for ts, _ in reads]
+                entries.append(
+                    BmwTelemetryCandidateEntry(
+                        frame_id=frame_id,
+                        byte_offset=offset,
+                        read_count=len(reads),
+                        distinct_value_count=len(distinct),
+                        first_seen_ms=min(timestamps),
+                        last_seen_ms=max(timestamps),
+                        sample_values=[f"{v:02X}" for v in values[:5]],
+                        observed_pattern=_classify_observed_pattern(values),
+                    )
+                )
+
+        entries.sort(key=lambda e: (-e.read_count, e.frame_id, e.byte_offset))
+        return entries
 
 
 def build_analysis_result(
@@ -188,6 +289,7 @@ def build_analysis_result(
 ) -> BmwAnalysisResult:
     canid_stats = BmwStatisticsEngine().compute(frames)
     byte_variability = ByteVariabilityAnalyser().analyse(frames)
+    telemetry_candidates = BmwTelemetryCandidateAnalyser().discover(frames)
 
     summary = {
         "total_entries": total_entries,
@@ -200,6 +302,7 @@ def build_analysis_result(
         frames=frames,
         canid_stats=canid_stats,
         byte_variability=byte_variability,
+        telemetry_candidates=telemetry_candidates,
         summary=summary,
         errors=parse_errors,
     )

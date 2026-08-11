@@ -886,8 +886,13 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "Module IPC (720 request -> 728 response). Source: user field-"
         "verified against the vehicle's dash odometer reading at capture "
         "time (2026-08-05, input/log_028.csv). Equation: raw (3 bytes) / "
-        "1000 = km. Observed raw 0x1BAF99 = 1814425 -> 1814.425 km, "
-        "constant for the whole capture (vehicle stationary).",
+        "10 = km. Observed raw 0x1BAF99 = 1814425 -> 181442.5 km "
+        "(181442.50 when displayed to two decimal places), matching the "
+        "vehicle's ~181,4xx km dash reading. Cross-checked across 4,218 "
+        "responses in all captures containing 404C: raw 1811175-1818905 "
+        "-> 181117.5-181890.5 km, a continuous physically plausible "
+        "odometer progression. The previous raw/1000 equation was two "
+        "decimal places too small.",
     ),
     "F45E": (
         "Engine Fuel Rate (Instantaneous Fuel Economy)",
@@ -899,8 +904,11 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "DISTINCT from the standard SAE J1979 Mode 01 PID 0x5E (also "
         "'Engine Fuel Rate', same formula/units) already in "
         "OBD2_PID_NAMES -- the vehicle may expose the same data via "
-        "either addressing scheme. NOT yet observed in any Decoding 2000 "
-        "capture.",
+        "either addressing scheme. Observed in 3,200 responses across "
+        "input/log_041.csv through log_054.csv: raw 0-771 -> 0-38.55 "
+        "L/h. Cross-check against simultaneous standard PID 0x5E reads "
+        "gives a median absolute difference of 0.05 L/h, independently "
+        "validating both formulas.",
     ),
     "402A": (
         "Vehicle Battery Voltage (Volts)",
@@ -910,8 +918,20 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "DID 22 402A, header 726, equation (A/20)+6, units V, resolution "
         "0.05V, range 6-18.75V. Multiple users confirmed this corrected "
         "formula gives realistic readings (an initial A/10.0 guess in "
-        "the same thread was wrong). NOT yet observed in any Decoding "
-        "2000 capture.",
+        "the same thread was wrong). Observed in 4,194 responses: raw "
+        "48-172 -> 8.4-14.6V. Cross-check against simultaneous standard "
+        "PID 0x42 reads gives a median absolute difference of 0.08V.",
+    ),
+    "402B": (
+        "Vehicle Battery Current",
+        "confirmed",
+        "Module BdyCM (726). Source: saeb.net 'PX1 Alternator Voltage / "
+        "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
+        "DID 22 402B, header 726, equation A-127, units A. Observed in "
+        "input/log_048.csv and input/log_055.csv: raw 0x81/0x80 "
+        "(129/128) -> +2/+1 A. The formula is publicly sourced; these "
+        "captured readings have not been field-verified against a live "
+        "current measurement.",
     ),
     "4028": (
         "Vehicle Battery State of Charge (Estimated)",
@@ -920,8 +940,9 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
         "DID 22 4028, header 726, equation A, units %, resolution 1%, "
         "range 0-255 (percent, values above 100 not expected in normal "
-        "use). User-confirmed working in that thread. NOT yet observed "
-        "in any Decoding 2000 capture.",
+        "use). User-confirmed working in that thread. Observed in 4,179 "
+        "responses across input/log_041.csv through log_055.csv: "
+        "raw 75-100 -> 75-100%.",
     ),
     "4029": (
         "Vehicle Battery Temperature (Estimated)",
@@ -930,21 +951,27 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "Battery Charge Voltage PIDs' thread (2026-08-05 lookup) -- "
         "DID 22 4029, header 726, equation A-40, units degC, resolution "
         "1 degC, range -40 to 215. User-confirmed working in that "
-        "thread. NOT yet observed in any Decoding 2000 capture.",
+        "thread. Observed in 3,649 responses across input/log_041.csv "
+        "through log_055.csv: raw 57-62 -> 17-22 degC.",
     ),
     "1E1C": (
         "Automatic Transmission Fluid Temp (ATF)",
-        "confirmed",
-        "Module TCM (7E1 request -> 7E9 response). 2-byte value. "
-        "Equation: raw/10=degC (NOT the raw*6.3=degC previously noted "
-        "from GreatScan 3.5's source, which gave an impossible ~5460- "
-        "5510 degC here and was likely mistranscribed/misapplied). "
-        "User field-verified 2026-08-05: raw 0x0363/0x0368/0x036A "
-        "(867/872/874) across input/log_010.csv & log_011.csv -> "
-        "~86.7-87.4 degC, confirmed correct against a live reading.",
+        "unresolved",
+        "Module TCM (7E1 request -> 7E9 response). 2-byte value. The DID "
+        "name is retained from the user's scan-tool identification, but "
+        "the scaling formula is unresolved. The former raw/10=degC "
+        "formula matched an older claimed live reading in input/log_010.csv "
+        "and log_011.csv (raw 867-874 -> 86.7-87.4 degC), but fails newer "
+        "field evidence: input/log_037.csv raw 1236-1255 would produce "
+        "123.6-125.5 degC while the live scan tool showed 68-69 degC. It "
+        "also produces an implausible corpus maximum of 165.3 degC. A "
+        "possible raw/20+7 equation fits log_037 (68.8-69.75 degC) but "
+        "contradicts the older reading, so it is not adopted without a "
+        "new controlled field correlation. Do not use this DID for a "
+        "scaled gauge yet.",
     ),
     "03F6": (
-        "Exhaust Gas Temp 12 (EGT12)",
+        "Exhaust Gas Temp 12 (EGT12) [Post-DPF]",
         "confirmed",
         "Module PCM (7E0 request -> 7E8 response). 1-byte value. Equation: "
         "raw*5=degC. User field reading (2026-08-05, input/log_021.csv): "
@@ -960,10 +987,58 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "exactly matching this DID's already-observed raw 23/24 "
         "(23*5=115, 24*5=120) from input/log_024.csv -- resolves the "
         "earlier open question (saeb.net research, 2026-08-05) of which "
-        "specific EGT probe location this DID represents.",
+        "specific EGT probe location this DID represents. "
+        "POSITION CONFIRMED 2026-08-11 (Post-DPF) via cross-signal "
+        "correlation in input/log_052.csv: EGT12 is consistently "
+        "equal-to-or-cooler than EGT13/03F5 in every one of 14 sessions "
+        "checked (never the reverse -- a reproducible exhaust-path "
+        "temperature gradient, not noise). In log_052, a clear DPF active "
+        "regen signature was isolated at ts~532819-549919ms: road speed "
+        "(OBD PID 0D) held rock-steady 113-115 km/h and RPM (PID 0C) held "
+        "steady ~2117-2146 (no acceleration), yet Engine Load (PID 04) "
+        "jumped 34%->62% and Fuel Rate (F45E) tripled ~7->23 L/h then "
+        "crashed to 1.65 L/h immediately after -- extra fuel burned with "
+        "zero corresponding driving-demand change, the classic post-"
+        "injection regen signature. EGT12 peaked at ts=546139ms (590 "
+        "degC), landing almost exactly on the load/fuel spike's peak "
+        "(ts=545338ms), while EGT13 had already peaked earlier "
+        "(ts=523521ms, 620 degC) and was declining before the regen fuel "
+        "event even started -- EGT12 tracks the regen heat release, "
+        "EGT13 does not, placing EGT12 downstream of (after) the DPF. "
+        "Corroborated (same steady-speed/steady-RPM + elevated "
+        "load/fuel pattern) in input/log_046.csv (speed 110-111 km/h, RPM "
+        "2066-2080, load 65.9-84.3%, fuel 15.6-21.1 L/h during its own "
+        "EGT12 peak). input/log_051.csv's EGT12 peak was inconclusive "
+        "(NOT contradictory) for this check -- that window has genuine "
+        "speed/RPM swings (75-86 km/h, RPM 1523-2540) confounding the "
+        "steady-cruise isolation technique. CROSS-CHECKED 2026-08-11: MAP/"
+        "boost (PID 0B) also spikes hard during log_052's window (84-88 "
+        "kPa baseline -> 195 kPa) with ACT (intercooler temp) dropping "
+        "30->24 degC at the same time -- i.e. the engine was genuinely "
+        "flowing more air/making more power, not just injecting extra "
+        "fuel with zero work done. This raised (and has now been ruled "
+        "out) an alternative explanation: a road-grade/headwind increase "
+        "under cruise control could also produce constant speed/RPM with "
+        "higher load/boost, unrelated to DPF regen. User confirmed "
+        "2026-08-11 this stretch of driving was steady/flat (no hill), "
+        "ruling out the road-grade alternative and reinforcing the regen "
+        "interpretation. EGRC (commanded EGR, PID 2C) was also checked and "
+        "found NOT to be regen-specific here -- it sits at 0% for a much "
+        "broader ~7.7 minute stretch (ts 175624-638136ms) than just the "
+        "spike window, so EGR-closed is this log's general highway-cruise "
+        "baseline, not a regen signature on its own. NOTE: the underlying "
+        "Post-DPF/Pre-DPF position call rests on the 14-session EGT13>= "
+        "EGT12 cross-log consistency (structural, independent of any "
+        "single event's cause); the log_052 regen narrative is corroborating "
+        "context, now field-confirmed as steady driving rather than a "
+        "hill/headwind confound. This positional finding is a "
+        "data-correlation inference (multi-signal, cross-log, "
+        "reproducible) plus this steady-driving field confirmation, not a "
+        "live scan-tool reading of physical sensor location -- flagged as "
+        "such per AGENTS.md, user-directed confirmation 2026-08-11.",
     ),
     "03F5": (
-        "Exhaust Gas Temp 13 (EGT13)",
+        "Exhaust Gas Temp 13 (EGT13) [Pre-DPF]",
         "confirmed",
         "Module PCM (7E0 request -> 7E8 response). 1-byte value. Equation: "
         "raw*5=degC (same formula/family as confirmed EGT12 03F6). "
@@ -974,7 +1049,15 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "EGT sensor positions on the same exhaust bank: log_012 03F5 "
         "58-62 vs 03F6 56-57, log_013 03F5 61-76 vs 03F6 59-76, log_024 "
         "03F5 24-25 vs 03F6 23. Also present alone (no 03F6) in "
-        "input/log_035.csv, raw 23-25 -> 115-125degC.",
+        "input/log_035.csv, raw 23-25 -> 115-125degC. "
+        "POSITION CONFIRMED 2026-08-11 (Pre-DPF) via the same cross-signal "
+        "correlation documented on EGT12/03F6's entry above (see that "
+        "entry for the full evidence chain: EGT13 consistently reads "
+        "hotter than EGT12 in all 14 sessions checked, and EGT13's peak "
+        "in input/log_052.csv occurred BEFORE the isolated steady-cruise "
+        "regen fuel/load event and had already started declining once it "
+        "began, whereas EGT12 tracked the regen heat release directly) -- "
+        "user-directed confirmation 2026-08-11.",
     ),
     "051C": (
         "Air Charge Temp (Intercooler) [ACT]",
@@ -1059,8 +1142,51 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "2026-08-05). Closest standard PID to 'Boost Pressure' for a "
         "turbo-diesel (MAP is absolute pressure, not gauge boost above "
         "atmospheric -- treat as an approximation, not a literal boost "
-        "gauge, until a real reading confirms the relationship). NOT yet "
-        "observed in any Decoding 2000 capture.",
+        "gauge, until a real reading confirms the relationship). OBSERVED "
+        "2026-08-10 in input/log_030.csv: idle baseline raw 0x66/0x67 "
+        "(102/103 kPa), swinging up to raw 0xDD (221 kPa) during the "
+        "capture -- 221-101.3=~120 kPa gauge boost (~17 psi), a real, "
+        "physically plausible turbo boost signal with multiple "
+        "acceleration pulses, not field-verified against a live reading.",
+    ),
+    "0F": (
+        "Intake Air Temp",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x0F. Equation: raw-40=degC. "
+        "Observed in input/log_030.csv and input/log_051.csv from both "
+        "PCM and TCM: raw 48-67 -> 8-27 degC, a physically plausible "
+        "intake-air temperature range.",
+    ),
+    "10": (
+        "Mass Air Flow (MAF)",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x10. Equation: raw/100=g/s "
+        "(raw is the 2-byte ((A*256)+B) value). Observed from PCM in "
+        "input/log_030.csv and input/log_051.csv: raw 919-16424 -> "
+        "9.19-164.24 g/s, a physically plausible idle-to-load range.",
+    ),
+    "11": (
+        "Absolute Throttle Position",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x11. Equation: raw*100/255=%. "
+        "Observed from PCM in input/log_030.csv and input/log_051.csv: "
+        "raw 222-255 -> 87.1-100%. This is the standardized absolute "
+        "throttle-position value, not a field-verified pedal reading.",
+    ),
+    "1F": (
+        "Run Time Since Engine Start",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x1F. Equation: raw=seconds "
+        "(raw is the 2-byte ((A*256)+B) value). Observed from PCM and "
+        "TCM across input/log_011.csv, input/log_030.csv, and "
+        "input/log_051.csv: 33-1918 seconds.",
+    ),
+    "21": (
+        "Distance Travelled With MIL On",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x21. Equation: raw=km (raw is "
+        "the 2-byte ((A*256)+B) value). Observed from PCM and TCM in "
+        "input/log_030.csv and input/log_051.csv: raw 0 -> 0 km.",
     ),
     "2C": (
         "Commanded EGR (EGRC)",
@@ -1068,8 +1194,9 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "Standard SAE J1979 Mode 01 PID 0x2C. Equation: raw*100/255=%. "
         "Source: independently cross-confirmed against Greatscan 3.5's "
         "own working implementation (lib/Vehicle/src/ford_protocol.cpp, "
-        "FordPids::COMMANDED_EGR, 2026-08-05). NOT yet observed in any "
-        "Decoding 2000 capture.",
+        "FordPids::COMMANDED_EGR, 2026-08-05). OBSERVED 2026-08-10 in "
+        "input/log_030.csv: raw 0x85 (133) -> 52.2%, not field-verified "
+        "against a live reading.",
     ),
     "2D": (
         "EGR Error (EGRE)",
@@ -1077,8 +1204,24 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "Standard SAE J1979 Mode 01 PID 0x2D. Equation: (raw-128)*100/128"
         "=%. Source: independently cross-confirmed against Greatscan "
         "3.5's own working implementation (lib/Vehicle/src/"
-        "ford_protocol.cpp, FordPids::EGR_ERROR, 2026-08-05). NOT yet "
-        "observed in any Decoding 2000 capture.",
+        "ford_protocol.cpp, FordPids::EGR_ERROR, 2026-08-05). OBSERVED "
+        "2026-08-10 in input/log_030.csv: raw 0xBF (191) -> 49.2%, not "
+        "field-verified against a live reading.",
+    ),
+    "31": (
+        "Distance Since Diagnostic Trouble Codes Cleared",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x31. Equation: raw=km (raw is "
+        "the 2-byte ((A*256)+B) value). Observed from PCM and TCM in "
+        "input/log_030.csv and input/log_051.csv: 1965-2253 km.",
+    ),
+    "33": (
+        "Barometric Pressure",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x33. Equation: raw=kPa "
+        "directly. Observed from PCM and TCM in input/log_030.csv and "
+        "input/log_051.csv: raw 99-101 -> 99-101 kPa, a physically "
+        "plausible atmospheric-pressure range.",
     ),
     "2F": (
         "Fuel Tank Level (Fuel Left)",
@@ -1086,8 +1229,9 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "Standard SAE J1979 Mode 01 PID 0x2F. Equation: raw*100/255=%. "
         "Source: independently cross-confirmed against Greatscan 3.5's "
         "own working implementation (lib/Vehicle/src/ford_protocol.cpp, "
-        "FordPids::FUEL_LEVEL, 2026-08-05). NOT yet observed in any "
-        "Decoding 2000 capture.",
+        "FordPids::FUEL_LEVEL, 2026-08-05). OBSERVED 2026-08-10 in "
+        "input/log_030.csv: raw 0xDC (220) -> 86.3%, not field-verified "
+        "against a live reading.",
     ),
     "42": (
         "Control Module Voltage (Volts)",
@@ -1096,7 +1240,19 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "1000 = V. Source: independently cross-confirmed against "
         "Greatscan 3.5's own working implementation (lib/Vehicle/src/"
         "ford_protocol.cpp, FordPids::CONTROL_MODULE_VOLTAGE, "
-        "2026-08-05). NOT yet observed in any Decoding 2000 capture.",
+        "2026-08-05). OBSERVED 2026-08-10 in input/log_030.csv: BOTH PCM "
+        "(7E8, raw 0x3824=14372 -> 14.372V) and TCM (7E9, raw "
+        "0x36D2=14034 -> 14.034V) independently answered this PID -- two "
+        "modules reporting system voltage. Not field-verified against a "
+        "live reading.",
+    ),
+    "46": (
+        "Ambient Air Temp",
+        "confirmed",
+        "Standard SAE J1979 Mode 01 PID 0x46. Equation: raw-40=degC. "
+        "Observed from PCM in input/log_030.csv and input/log_051.csv: "
+        "raw 46-60 -> 6-20 degC, a physically plausible ambient-air "
+        "temperature range.",
     ),
     "59": (
         "Fuel Rail Pressure (absolute)",
@@ -1107,8 +1263,10 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "Desired' (target value). Source: independently cross-confirmed "
         "against Greatscan 3.5's own working implementation "
         "(lib/Vehicle/src/ford_protocol.cpp, "
-        "FordPids::FUEL_RAIL_PRESSURE_ABS, 2026-08-05). NOT yet observed "
-        "in any Decoding 2000 capture.",
+        "FordPids::FUEL_RAIL_PRESSURE_ABS, 2026-08-05). OBSERVED "
+        "2026-08-10 in input/log_030.csv: raw 0x0D9A (3482) -> 34.82 MPa "
+        "rising to raw 0x0E84 (3716) -> 37.16 MPa, not field-verified "
+        "against a live reading.",
     ),
     "5E": (
         "Engine Fuel Rate",
@@ -1116,8 +1274,10 @@ OBD2_PID_NAMES: dict[str, tuple[str, str, str]] = {
         "Standard SAE J1979 Mode 01 PID 0x5E. Equation: raw (2 bytes) * "
         "0.05 = L/h. Source: independently cross-confirmed against "
         "Greatscan 3.5's own working implementation (lib/Vehicle/src/"
-        "ford_protocol.cpp, FordPids::ENGINE_FUEL_RATE, 2026-08-05). NOT "
-        "yet observed in any Decoding 2000 capture.",
+        "ford_protocol.cpp, FordPids::ENGINE_FUEL_RATE, 2026-08-05). "
+        "OBSERVED 2026-08-10 in input/log_030.csv: raw 0x0010 (16) -> 0.8 "
+        "L/h at idle, rising to raw 0x00D8 (216) -> 10.8 L/h under "
+        "throttle, not field-verified against a live reading.",
     ),
 }
 
@@ -1131,10 +1291,18 @@ OBD2_PID_MODULE_HINTS: dict[str, str] = {
     "0C": "PCM",
     "0D": "PCM",
     "0B": "PCM",
+    "0F": "PCM",
+    "10": "PCM",
+    "11": "PCM",
+    "1F": "PCM",
+    "21": "PCM",
     "2C": "PCM",
     "2D": "PCM",
     "2F": "PCM",
+    "31": "PCM",
+    "33": "PCM",
     "42": "PCM",
+    "46": "PCM",
     "59": "PCM",
     "5E": "PCM",
 }
@@ -1154,6 +1322,7 @@ DID_MODULE_HINTS: dict[str, str] = {
     "051C": "PCM",
     "F45E": "PCM",
     "402A": "BdyCM",
+    "402B": "BdyCM",
     "4028": "BdyCM",
     "4029": "BdyCM",
     "9938": "FCIM",
@@ -1161,6 +1330,55 @@ DID_MODULE_HINTS: dict[str, str] = {
     "F405": "PCM",
     "F40F": "PCM",
     "DD05": "PCM",
+}
+
+# Structured (formula, unit) pair for every currently-confirmed DID/PID
+# above, extracted verbatim from that entry's notes text. This exists
+# purely so downstream consumers (e.g. GreatScan 3.5's cross-repo porting
+# of confirmed gauges -- see AGENTS.md "System overview") don't have to
+# parse the prose `notes` field to find the raw-to-unit equation -- it is
+# NOT a separate source of truth. Every key here must also be a
+# `confidence="confirmed"` key in DID_NAME_HYPOTHESES or OBD2_PID_NAMES,
+# and the formula/unit must match what that entry's notes already say.
+DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
+    # DID_NAME_HYPOTHESES (Ford UDS Mode 0x22 DIDs)
+    "03DC": ("raw / 100", "MPa"),
+    "F446": ("raw - 40", "degC"),
+    "F405": ("raw - 40", "degC"),
+    "F40F": ("raw - 40", "degC"),
+    "DD05": ("raw - 40", "degC"),
+    "0522": ("raw - 40", "degC"),
+    "404C": ("raw / 10", "km"),
+    "F45E": ("((A*256)+B) / 20", "L/h"),
+    "402A": ("(raw / 20) + 6", "V"),
+    "402B": ("raw - 127", "A"),
+    "4028": ("raw", "%"),
+    "4029": ("raw - 40", "degC"),
+    "03F6": ("raw * 5", "degC"),
+    "03F5": ("raw * 5", "degC"),
+    "051C": ("raw - 40", "degC"),
+    "9938": ("raw", "%"),
+    "9B03": ("raw", "%"),
+    # OBD2_PID_NAMES (standard SAE J1979 Mode 0x01 PIDs)
+    "04": ("raw * 100 / 255", "%"),
+    "05": ("raw - 40", "degC"),
+    "0C": ("raw / 4", "rpm"),
+    "0D": ("raw", "km/h"),
+    "0B": ("raw", "kPa"),
+    "0F": ("raw - 40", "degC"),
+    "10": ("raw / 100", "g/s"),
+    "11": ("raw * 100 / 255", "%"),
+    "1F": ("raw", "s"),
+    "21": ("raw", "km"),
+    "2C": ("raw * 100 / 255", "%"),
+    "2D": ("(raw - 128) * 100 / 128", "%"),
+    "2F": ("raw * 100 / 255", "%"),
+    "31": ("raw", "km"),
+    "33": ("raw", "kPa"),
+    "42": ("raw / 1000", "V"),
+    "46": ("raw - 40", "degC"),
+    "59": ("raw * 10", "kPa"),
+    "5E": ("raw * 0.05", "L/h"),
 }
 
 
@@ -1185,6 +1403,7 @@ def build_known_did_reference() -> list[KnownDidEntry]:
             (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name),
             "?",
         )
+        formula, unit = DID_PID_FORMULA_UNITS.get(did, ("", ""))
         entries.append(
             KnownDidEntry(
                 module_name=module_name,
@@ -1194,6 +1413,8 @@ def build_known_did_reference() -> list[KnownDidEntry]:
                 confidence=confidence,
                 notes=notes,
                 code_type="DID",
+                formula=formula,
+                unit=unit,
             )
         )
     for pid, module_name in OBD2_PID_MODULE_HINTS.items():
@@ -1204,6 +1425,7 @@ def build_known_did_reference() -> list[KnownDidEntry]:
             (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name),
             "?",
         )
+        formula, unit = DID_PID_FORMULA_UNITS.get(pid, ("", ""))
         entries.append(
             KnownDidEntry(
                 module_name=module_name,
@@ -1213,6 +1435,8 @@ def build_known_did_reference() -> list[KnownDidEntry]:
                 confidence=confidence,
                 notes=notes,
                 code_type="PID",
+                formula=formula,
+                unit=unit,
             )
         )
     entries.sort(key=lambda e: (e.module_name, e.code_type, e.did))

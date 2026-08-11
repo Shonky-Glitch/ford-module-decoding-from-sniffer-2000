@@ -33,15 +33,15 @@ this session's findings (or a field test) — per AGENTS.md, never guess.
 | `0324` | 2-byte | 73/91 distinct values — highly variable | none — no pattern match | ☐ | |
 | `1E1F` | 1-byte? | near-constant `05`/`00` | possible status/flag bit (adjacent to confirmed ATF=`1E1C`) | ☐ | |
 | `03C8` | 2-byte | steadily decreasing 871→851 over session | possible cooldown timer/counter | ☐ | |
-| `03F5` | 1-byte | ~61-62 raw | same 03xx family as confirmed Sump Oil Temp `03F3` — paired temp sensor? | ☐ | |
-| `03F6` | 1-byte | ~59 raw | same 03xx family as `03F3`/`03F5` — paired temp sensor? | ☐ | |
+| `03F5` | 1-byte | ~61-62 raw | NOTE: already confirmed elsewhere as **Exhaust Gas Temp 13 (EGT13)**, raw*5=degC — see `DID_NAME_HYPOTHESES` in `frame_analyser.py`. Row kept only for history; no lookup needed. | N/A | EGT13, raw*5=degC (confirmed) |
+| `03F6` | 1-byte | ~59 raw | NOTE: already confirmed elsewhere as **Exhaust Gas Temp 12 (EGT12)**, raw*5=degC — see `DID_NAME_HYPOTHESES` in `frame_analyser.py`. Row kept only for history; no lookup needed. | N/A | EGT12, raw*5=degC (confirmed) |
 | `F405` | 1-byte | `0x7C` (124) | sourced from saeb.net as **Coolant Temp**, raw-40=degC (~84°C) — needs official confirmation, not yet added to code | ☐ | |
 
 ## Priority 2 — older unidentified DIDs (from the main `input/` capture set)
 
 | DID | Byte size | Observed raw value(s) | Current guess (unconfirmed) | Found? | Official name / formula |
 |---|---|---|---|---|---|
-| `033C` | 2-byte | `0x0152`/`0x0153` (±1 LSB) | possible fine-res analog sensor, same family as confirmed Sump Oil Temp `03F3` | ☐ | |
+| `033C` | 2-byte | `0x0152`/`0x0153` (±1 LSB) | possible fine-res analog sensor — NOTE: previously justified as "same family as confirmed Sump Oil Temp `03F3`", but `03F3` was never actually confirmed anywhere in this project (no such entry exists in `DID_NAME_HYPOTHESES`); that basis is invalid and the guess should be treated as having no supporting pattern | ☐ | |
 | `035A` | 2-byte | `0x034A`-`0x034E` (842-846) | possible engine-load/pressure | ☐ | |
 | `03BA` | 2-byte | `0x0287`-`0x0289` (647-649) | same 03xx family as above | ☐ | |
 | `0914` | 2-byte | alternates ~`0x030B`/`0x0310` (779/784) in blocks | possible duty cycle/counter, paired with `0915` | ☐ | |

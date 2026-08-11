@@ -17,6 +17,39 @@ Its only responsibility is analysing recorded CAN traffic.
 
 Use Python 3 only.
 
+## System overview (three separate projects)
+
+This workflow spans three separate repositories. Decoding 2000 never modifies
+the other two (see "Out of scope" below), but understanding the full loop is
+required context for why DID confirmation matters:
+
+1. **CAN Sniffer 2000** (hardware/firmware, separate project) logs raw CAN
+   bus traffic from the vehicle to an SD card. It has no interpretation
+   logic -- just capture.
+2. **Decoding 2000** (this project) reads those SD card logs, decodes
+   ISO-TP/UDS framing, and identifies candidate PIDs/DIDs. Every candidate
+   starts as `confidence=unidentified` and may only become `confidence=
+   confirmed` via a live field reading or an independently sourced public
+   reference -- see "Telemetry candidate workflow" below.
+3. **GreatScan 3.5** (ESP32 firmware, separate project) is the payoff and
+   the test loop, in both directions:
+   - Confirmed DIDs get wired into `scanner_runtime.cpp`/`ford_protocol.h`
+     as real, named, scaled gauges (e.g. `EGT12`, `FPDES`, `BATV`).
+   - Not-yet-confirmed DIDs are ALSO already wired in, but raw/unscaled,
+     on a dedicated "Telemetry Test Codes" UI page
+     (`src/ui/test_pages/telemetry_test_page.*`, fed by `TEST_HYPOTHESIS_DIDS`
+     in `scanner_runtime.cpp`) labelled `TEST-<hex>`. This is the actual
+     mechanism for testing whether Decoding 2000's interpretation of a
+     hypothesis DID holds up: watch the raw `TEST-<hex>` value live in the
+     vehicle while doing something known (turn a dial, run the engine hot,
+     toggle AC, etc.), then report the observed behaviour back here so it
+     can be added to `DID_NAME_HYPOTHESES` as `confirmed` and promoted from
+     a raw test slot to a real named gauge.
+
+In short: **CAN Sniffer 2000 captures -> Decoding 2000 interprets -> you
+confirm -> GreatScan 3.5 turns it into a gauge and lets you test/validate
+the interpretation live.**
+
 ## Project scope
 
 Responsibilities include:
@@ -89,7 +122,47 @@ CSV / JSON / Reports
 
 ## Telemetry candidate workflow
 
-How new PIDs/DIDs get identified, in order:
+There are two ways a DID/PID gets marked "confirmed" — pick whichever
+matches what you actually have:
+
+### Fast path: you already have confirmed field data
+
+If you've already field-tested a DID yourself (watched it live against a
+scan tool, a dash gauge, a multimeter, turned a physical control and
+watched the value track it, etc.), skip straight to handing it over. One
+line per DID is enough:
+
+```
+DID <hex> = <name>, formula: <raw-to-unit equation>, evidence: <what you did/observed, with numbers>
+```
+
+Example:
+
+```
+DID F433 = Battery Current, formula: raw/100=A, evidence: multimeter read
+8.4A at idle; raw was 0x0348 (840) at the same instant across 3 repeated
+reads in input/log_030.csv.
+```
+
+Given that, the agent will (no re-discovery/re-asking needed for data you
+already assert is confirmed):
+
+1. Add/update the entry in `DID_NAME_HYPOTHESES` in `src/frame_analyser.py`
+   with `confidence="confirmed"` and your evidence text verbatim in the
+   notes.
+2. Re-run the relevant pipeline (`python src/main.py` for Ford) so
+   `known_pids.csv` / `telemetry/candidates.csv` regenerate with it.
+3. Record it in repo memory (`/memories/repo/can-bus-facts.md`).
+4. If it should also become a live gauge in GreatScan 3.5, wire it into
+   `scanner_runtime.cpp` (cross-repo change, only if you ask for it).
+
+This still counts as "confirmed" under the Engineering rules above — the
+"never guess" rule is about the agent not inventing meanings on its own,
+not about re-litigating data you're directly telling it you've verified.
+
+### Slow path: discovering new candidates from scratch
+
+How new PIDs/DIDs get identified when nobody has field data yet, in order:
 
 1. Run the Ford pipeline (`python src/main.py`, optionally `--pattern`/
    `--output-dir` to isolate one log) to regenerate

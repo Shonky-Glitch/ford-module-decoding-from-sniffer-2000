@@ -142,6 +142,8 @@ class KnownDidEntry:
     confidence: str
     notes: str = ""
     code_type: str = "DID"
+    formula: str = ""
+    unit: str = ""
 
 
 @dataclass
@@ -214,6 +216,28 @@ class BmwByteVariability:
     min_value: int
     max_value: int
     always_constant: bool
+    observed_pattern: str
+
+
+@dataclass
+class BmwTelemetryCandidateEntry:
+    """A (CAN id, byte offset) worth polling for a live gauge/telemetry
+    display -- flagged purely because its value changed across repeated
+    reads in the capture. Mirrors frame_analyser.py's
+    TelemetryCandidateEntry structurally (for output/report parity with
+    the Ford pipeline), but does NOT claim to know what any byte
+    physically represents -- no module/signal name or formula exists for
+    BMW yet (see AGENTS.md / reference/bmw_ecu_reference.md).
+    """
+
+    frame_id: str
+    byte_offset: int
+    read_count: int
+    distinct_value_count: int
+    first_seen_ms: int | None
+    last_seen_ms: int | None
+    sample_values: list[str]
+    observed_pattern: str
 
 
 @dataclass
@@ -223,6 +247,8 @@ class BmwAnalysisResult:
     frames: list[BmwFrame] = field(default_factory=list)
     canid_stats: dict[str, BmwCanIdCycleStats] = field(default_factory=dict)
     byte_variability: list[BmwByteVariability] = field(default_factory=list)
+    telemetry_candidates: list[BmwTelemetryCandidateEntry] = field(default_factory=list)
     summary: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
 

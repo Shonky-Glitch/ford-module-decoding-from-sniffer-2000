@@ -75,6 +75,33 @@ Decoding 2000/
    which reads from `input/bmw/` and writes `can_id_summary.csv`,
    `byte_variability.csv`, and `report.txt` to `output/bmw/`.
 
+## Submitting your own confirmed PID/DID data
+
+If you've already field-tested a DID/PID yourself — watched it live
+against a scan tool, dash gauge, or multimeter, or turned a physical
+control and watched the value track it — you don't need to re-run the
+discovery workflow. Just hand it over, one line per DID:
+
+```
+DID <hex> = <name>, formula: <raw-to-unit equation>, evidence: <what you did/observed, with numbers>
+```
+
+Example:
+
+```
+DID F433 = Battery Current, formula: raw/100=A, evidence: multimeter read
+8.4A at idle; raw was 0x0348 (840) at the same instant across 3 repeated
+reads in input/log_030.csv.
+```
+
+Given that, the agent adds it to `DID_NAME_HYPOTHESES` in
+`src/frame_analyser.py` as `confidence="confirmed"`, regenerates
+`known_pids.csv`/`telemetry/candidates.csv`, and records it in repo
+memory — no back-and-forth re-discovery needed. See
+[AGENTS.md](AGENTS.md)'s "Telemetry candidate workflow" for the full
+rules (including the slower from-scratch discovery path for DIDs nobody
+has field data for yet).
+
 ## Tests
 
 Run the test suite with:

@@ -13,17 +13,29 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from bmw_analyser import analyse
+from bmw_analyser import analyse, build_analysis_result
 from bmw_exporters import (
     export_byte_variability_csv,
     export_can_id_summary_csv,
+    export_csv,
+    export_json,
     export_report,
+    export_telemetry_candidates_csv,
 )
-from log_reader import read_all_logs
+from log_reader import RawLogEntry, read_all_logs
+from models import BmwAnalysisResult, BmwFrame
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT_DIR = REPO_ROOT / "input" / "bmw"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "output" / "bmw"
+
+# Source-log stems (filename without extension) flagged as useful
+# diagnostic references for future BMW protocol/module research -- mirrors
+# main.py's GREATSCAN_DIAGNOSTIC_SOURCES mechanism, but purely a
+# convenience export within this repo's own output/ tree (no equivalent
+# sibling project for BMW yet). Add more stems here as further notable
+# captures are identified.
+BMW_DIAGNOSTIC_SOURCES: set[str] = {"log_001"}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -48,15 +60,48 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _export_all(result: BmwAnalysisResult, output_dir: Path) -> None:
+    """Write the standard set of BMW decoded-output files to `output_dir`."""
+    export_json(result, output_dir / "decoded.json")
+    export_csv(result, output_dir / "decoded.csv")
+    export_can_id_summary_csv(result, output_dir / "can_id_summary.csv")
+    export_byte_variability_csv(result, output_dir / "byte_variability.csv")
+    export_report(result, output_dir / "report.txt")
+    export_telemetry_candidates_csv(
+        result, output_dir / "telemetry" / "candidates.csv"
+    )
+
+
+def export_bmw_diagnostics(
+    entries: list[RawLogEntry], result: BmwAnalysisResult, diagnostics_dir: Path
+) -> None:
+    """Export a standalone decoded-output set per log flagged in
+    BMW_DIAGNOSTIC_SOURCES, under output/bmw/diagnostics/.
+    """
+    frames_by_source: dict[str, list[BmwFrame]] = {}
+    for frame in result.frames:
+        if frame.source is None:
+            continue
+        stem = Path(frame.source.source_file).stem
+        frames_by_source.setdefault(stem, []).append(frame)
+
+    for stem in BMW_DIAGNOSTIC_SOURCES:
+        frames = frames_by_source.get(stem)
+        if not frames:
+            continue
+        total_entries = sum(1 for e in entries if Path(e.source_file).stem == stem)
+        sub_result = build_analysis_result(frames, [], total_entries)
+        _export_all(sub_result, diagnostics_dir / stem)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     entries = read_all_logs(args.input_dir, args.pattern)
     result = analyse(entries)
 
-    export_can_id_summary_csv(result, args.output_dir / "can_id_summary.csv")
-    export_byte_variability_csv(result, args.output_dir / "byte_variability.csv")
-    export_report(result, args.output_dir / "report.txt")
+    _export_all(result, args.output_dir)
+    export_bmw_diagnostics(entries, result, args.output_dir / "diagnostics")
 
     print(
         f"Processed {result.summary.get('total_entries', 0)} entries -> "

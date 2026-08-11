@@ -8,7 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from frame_analyser import (  # noqa: E402
+    DID_NAME_HYPOTHESES,
+    DID_PID_FORMULA_UNITS,
     FrameParser,
+        OBD2_PID_NAMES,
     FrameValidator,
     IsoTpDecoder,
     ModuleDiscoveryAnalyser,
@@ -17,6 +20,7 @@ from frame_analyser import (  # noqa: E402
     TelemetryCandidateAnalyser,
     UdsDecoder,
     analyse,
+    build_known_did_reference,
 )
 from log_reader import CSV_HEADER, read_log_file  # noqa: E402
 from models import RawLogEntry  # noqa: E402
@@ -163,6 +167,41 @@ def test_telemetry_candidate_analyser_unknown_did_has_no_hypothesis():
     assert len(entries) == 1
     assert entries[0].possible_name is None
     assert entries[0].confidence == "unidentified"
+
+
+def test_known_reference_includes_new_confirmed_did_and_pids():
+    entries = {(entry.code_type, entry.did): entry for entry in build_known_did_reference()}
+    expected = {
+        ("DID", "404C"): ("raw / 10", "km"),
+        ("DID", "402B"): ("raw - 127", "A"),
+        ("PID", "0F"): ("raw - 40", "degC"),
+        ("PID", "10"): ("raw / 100", "g/s"),
+        ("PID", "11"): ("raw * 100 / 255", "%"),
+        ("PID", "1F"): ("raw", "s"),
+        ("PID", "21"): ("raw", "km"),
+        ("PID", "31"): ("raw", "km"),
+        ("PID", "33"): ("raw", "kPa"),
+        ("PID", "46"): ("raw - 40", "degC"),
+    }
+
+    for key, (formula, unit) in expected.items():
+        assert entries[key].confidence == "confirmed"
+        assert entries[key].formula == formula
+        assert entries[key].unit == unit
+
+
+def test_every_confirmed_reference_has_exactly_one_formula():
+    confirmed = {
+        code for code, (_, confidence, _) in DID_NAME_HYPOTHESES.items()
+        if confidence == "confirmed"
+    }
+    confirmed.update(
+        code for code, (_, confidence, _) in OBD2_PID_NAMES.items()
+        if confidence == "confirmed"
+    )
+
+    assert set(DID_PID_FORMULA_UNITS) == confirmed
+    assert all(formula and unit for formula, unit in DID_PID_FORMULA_UNITS.values())
 
 
 def test_read_log_file_skips_csv_header(tmp_path):
