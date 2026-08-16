@@ -13,8 +13,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from bmw_analyser import analyse, build_analysis_result
-from bmw_exporters import (
+from raw_can_analyser import analyse, build_analysis_result
+from raw_can_exporters import (
     export_byte_variability_csv,
     export_can_id_summary_csv,
     export_csv,
@@ -66,7 +66,7 @@ def _export_all(result: BmwAnalysisResult, output_dir: Path) -> None:
     export_csv(result, output_dir / "decoded.csv")
     export_can_id_summary_csv(result, output_dir / "can_id_summary.csv")
     export_byte_variability_csv(result, output_dir / "byte_variability.csv")
-    export_report(result, output_dir / "report.txt")
+    export_report(result, output_dir / "report.txt", "BMW")
     export_telemetry_candidates_csv(
         result, output_dir / "telemetry" / "candidates.csv"
     )

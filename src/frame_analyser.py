@@ -383,8 +383,9 @@ class IsoTpReassembler:
     written back onto the First Frame's `fields`. Flow Control frames are
     only marked, not consumed as payload (they carry no UDS bytes).
 
-    Consecutive Frames are placed by their ISO-TP sequence number rather
-    than assumed to arrive in order — input/log_001.csv (lines 127-128)
+    Consecutive Frames are placed by their absolute position, using the
+    ISO-TP sequence number to find that position rather than assuming arrival
+    order — input/log_001.csv (lines 127-128)
     contains two Consecutive Frames logged with swapped sequence numbers at
     the same millisecond timestamp (a logger write-ordering quirk, not a
     bus fault), so reassembling strictly by arrival order corrupts the
@@ -395,7 +396,8 @@ class IsoTpReassembler:
       - An orphan Consecutive Frame (no active First Frame for its
         (bus, arbitration_id) at that point) — input/log_006.csv line 255 —
         is flagged, not silently dropped or merged.
-      - A duplicate or out-of-range sequence number is flagged.
+            - A duplicate or out-of-range sequence number is flagged. Sequence
+                numbers may wrap after 15 without colliding with an earlier fragment.
       - A First Frame whose Consecutive Frames never fully arrive by the
         end of the frame list is flagged as incomplete.
     """
@@ -428,7 +430,10 @@ class IsoTpReassembler:
                 self._consume(state, frame)
                 fragments: dict[int, bytes] = state["fragments"]  # type: ignore[assignment]
                 expected_count: int = state["expected_count"]  # type: ignore[assignment]
-                if expected_count > 0 and len(fragments) >= expected_count:
+                if expected_count > 0 and all(
+                    position in fragments
+                    for position in range(1, expected_count + 1)
+                ):
                     self._finish(state)
                     del active[key]
 
@@ -467,7 +472,12 @@ class IsoTpReassembler:
         expected_seqs: list[int] = state["expected_seqs"]  # type: ignore[assignment]
         fragments: dict[int, bytes] = state["fragments"]  # type: ignore[assignment]
 
-        if seq not in expected_seqs:
+        matching_positions = [
+            position
+            for position, expected_seq in enumerate(expected_seqs, start=1)
+            if expected_seq == seq and position not in fragments
+        ]
+        if not matching_positions and seq not in expected_seqs:
             frame.validation_errors.append(
                 f"unexpected ISO-TP sequence number: got {seq}, expected "
                 f"one of {expected_seqs}"
@@ -476,7 +486,7 @@ class IsoTpReassembler:
             frame.fields["iso_tp_reassembly_status"] = "unexpected_sequence"
             return
 
-        if seq in fragments:
+        if not matching_positions:
             frame.validation_errors.append(
                 f"duplicate ISO-TP consecutive frame sequence number: {seq}"
             )
@@ -484,12 +494,11 @@ class IsoTpReassembler:
             frame.fields["iso_tp_reassembly_status"] = "duplicate_sequence"
             return
 
-        fragments[seq] = frame.payload[1:]
-        state["arrival_order"].append(seq)  # type: ignore[union-attr]
+        absolute_position = matching_positions[0]
+        fragments[absolute_position] = frame.payload[1:]
+        state["arrival_order"].append(absolute_position)  # type: ignore[union-attr]
 
-        in_order = len(state["arrival_order"]) <= 1 or seq == expected_seqs[  # type: ignore[index]
-            len(state["arrival_order"]) - 1  # type: ignore[arg-type]
-        ]
+        in_order = absolute_position == len(state["arrival_order"])  # type: ignore[arg-type]
         frame.fields["iso_tp_reassembly_status"] = (
             "consumed" if in_order else "consumed_out_of_order"
         )
@@ -501,17 +510,20 @@ class IsoTpReassembler:
         expected_seqs: list[int] = state["expected_seqs"]  # type: ignore[assignment]
         fragments: dict[int, bytes] = state["fragments"]  # type: ignore[assignment]
 
-        # Assembled strictly by sequence number, not arrival order.
+        # Assemble by absolute CF position. The wire sequence number wraps
+        # every 16 frames and therefore cannot uniquely identify a fragment.
         buffer = bytearray(partial)
-        for seq in expected_seqs:
-            buffer.extend(fragments[seq])
+        for position in range(1, len(expected_seqs) + 1):
+            buffer.extend(fragments[position])
 
         full_uds = bytes(buffer[:total_len])
         uds_info = self._uds.decode(full_uds)
         first_frame.fields["uds_data_hex"] = full_uds.hex(" ").upper()
         first_frame.fields.update(uds_info)
 
-        reordered = state["arrival_order"] != expected_seqs  # type: ignore[comparison-overlap]
+        reordered = state["arrival_order"] != list(  # type: ignore[comparison-overlap]
+            range(1, len(expected_seqs) + 1)
+        )
         first_frame.fields["iso_tp_reassembly_status"] = (
             "complete_reordered" if reordered else "complete"
         )
@@ -880,6 +892,22 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "polling session (2026-08-05), consistent with a stationary/ "
         "cooled-down vehicle.",
     ),
+    "0579": (
+        "DPF Soot Load (Inferred Closed Loop)",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Source: Ranger Mods "
+        "'DPF MY17+ or Everest' and Ford Truck Enthusiasts 'Torque Pro "
+        "Ford 6.7L Extended PIDs' discussions: DID 22 0579, equation B, "
+        "units %, identified as DPF system percentage of maximum soot "
+        "loading (inferred closed loop). Ranger/Everest field reports "
+        "describe the value rising toward 88-100% before a regeneration "
+        "and falling to approximately 23% while EGT rises. Cross-checked "
+        "against local captures: input/log_006.csv response 00 40 -> 64%, "
+        "input/log_012.csv 00 43/00 44 -> 67/68%, input/log_024.csv "
+        "00 48 -> 72%, and input/log_056.csv plus log_057.csv 00 1E -> "
+        "30%. These values match the user-observed normal 20-80% soot "
+        "range and are distinct from DID 057B's inferred open-loop value.",
+    ),
     "404C": (
         "Total Distance (Odometer)",
         "confirmed",
@@ -969,6 +997,18 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "contradicts the older reading, so it is not adopted without a "
         "new controlled field correlation. Do not use this DID for a "
         "scaled gauge yet.",
+    ),
+    "1E1F": (
+        "Transmission Gear Engaged",
+        "confirmed",
+        "Module PCM (7E0 request -> 7E8 response). Formula: raw=engaged "
+        "forward gear number; unit gear. Source: user field-confirmed that "
+        "raw values 3, 4, and 5 track actual 3rd, 4th, and 5th gear changes "
+        "in the captured automatic-transmission logs (2026-08-16). "
+        "Independently cross-referenced against public Ford PID listings "
+        "identifying DID 22 1E1F as Transmission Gear Engaged. Values 0 "
+        "and 0x80 remain unmapped and must not be labelled P/R/N without "
+        "controlled field evidence.",
     ),
     "03F6": (
         "Exhaust Gas Temp 12 (EGT12) [Post-DPF]",
@@ -1317,7 +1357,9 @@ DID_MODULE_HINTS: dict[str, str] = {
     "03F6": "PCM",
     "03F5": "PCM",
     "1E1C": "TCM",
+    "1E1F": "PCM",
     "0522": "PCM",
+    "0579": "PCM",
     "404C": "IPC",
     "051C": "PCM",
     "F45E": "PCM",
@@ -1348,6 +1390,7 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
     "F40F": ("raw - 40", "degC"),
     "DD05": ("raw - 40", "degC"),
     "0522": ("raw - 40", "degC"),
+    "0579": ("B", "%"),
     "404C": ("raw / 10", "km"),
     "F45E": ("((A*256)+B) / 20", "L/h"),
     "402A": ("(raw / 20) + 6", "V"),
@@ -1357,6 +1400,7 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
     "03F6": ("raw * 5", "degC"),
     "03F5": ("raw * 5", "degC"),
     "051C": ("raw - 40", "degC"),
+    "1E1F": ("raw", "gear"),
     "9938": ("raw", "%"),
     "9B03": ("raw", "%"),
     # OBD2_PID_NAMES (standard SAE J1979 Mode 0x01 PIDs)

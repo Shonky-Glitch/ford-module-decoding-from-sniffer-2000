@@ -12,24 +12,29 @@ Decoding 2000/
 ├── input/          # Raw log files to be decoded, one subfolder per OEM
 │   ├── ford/         # Ford captures (log_*.csv)
 │   ├── bmw/          # BMW captures
-│   └── toyota/       # Placeholder for future Toyota captures
+│   ├── toyota/       # Placeholder for future Toyota captures
+│   └── hyundai/      # Placeholder for future Hyundai captures
 ├── output/         # Decoded / exported results, mirrored per OEM
 │   ├── ford/         # Ford decoded output
 │   │   ├── diagnostics/  # Per-log diagnostic exports (e.g. greatscan_3.5/)
 │   │   ├── research/     # Isolated per-log decode runs (see --output-dir below)
 │   │   └── telemetry/    # candidates.csv - dynamic DID/PID discovery
 │   ├── bmw/          # BMW raw-traffic-only analysis output
-│   └── toyota/       # Placeholder for future Toyota output
+│   ├── toyota/       # Placeholder for future Toyota output
+│   └── hyundai/      # Placeholder for future Hyundai output
 ├── reference/      # Human-curated ECU/module reference notes
 ├── tests/          # Unit tests
 └── src/
     ├── main.py            # Ford pipeline entry point / CLI
     ├── main_bmw.py        # BMW pipeline entry point / CLI
+    ├── main_hyundai.py    # Hyundai raw-CAN pipeline entry point / CLI
     ├── log_reader.py      # Reads raw log files from input/
     ├── frame_analyser.py  # Parses and analyses Ford frames (ISO-TP/UDS)
     ├── bmw_analyser.py    # Parses and analyses BMW frames (raw traffic only)
+    ├── raw_can_analyser.py # OEM-neutral broadcast-CAN analysis
     ├── exporters.py       # Writes Ford results to output/ford/
     ├── bmw_exporters.py   # Writes BMW results to output/bmw/
+    ├── raw_can_exporters.py # OEM-neutral raw-CAN exports
     └── models.py          # Shared data models/types
 ```
 
@@ -74,6 +79,17 @@ Decoding 2000/
 
    which reads from `input/bmw/` and writes `can_id_summary.csv`,
    `byte_variability.csv`, and `report.txt` to `output/bmw/`.
+
+   Hyundai captures currently use OEM-neutral raw broadcast-CAN analysis;
+   no diagnostic protocol, module name, PID/DID meaning, or scaling is assumed:
+
+   ```powershell
+   python src/main_hyundai.py
+   ```
+
+   This reads `input/hyundai/` and writes decoded raw frames, CAN-ID timing,
+   byte variability, `known_pids.csv` (confirmed broadcast CAN signals), a
+   report, and unidentified telemetry candidates to `output/hyundai/`.
 
 ## Submitting your own confirmed PID/DID data
 

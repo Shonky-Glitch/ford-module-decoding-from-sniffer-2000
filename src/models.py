@@ -161,12 +161,11 @@ class AnalysisResult:
 
 
 @dataclass
-class BmwFrame:
-    """A minimally-parsed BMW capture frame.
+class RawCanFrame:
+    """A minimally parsed, OEM-neutral broadcast CAN frame.
 
-    Deliberately NOT a Frame: BMW's diagnostic addressing/protocol has not
-    been confirmed for this project (see reference/bmw_ecu_reference.md), so
-    this holds only the raw fields read off the CSV row -- no ISO-TP/UDS
+    Deliberately NOT a decoded Frame: the source OEM's diagnostic protocol
+    is not inferred, so this holds only raw CSV fields -- no ISO-TP/UDS
     interpretation, no module-name/DID lookups. See AGENTS.md: never guess
     the input file format / packet meaning.
     """
@@ -181,8 +180,8 @@ class BmwFrame:
 
 
 @dataclass
-class BmwCanIdCycleStats:
-    """Traffic + cycle-time statistics for one BMW CAN identifier.
+class RawCanIdCycleStats:
+    """Traffic and cycle-time statistics for one raw CAN identifier.
 
     `median_interval_ms` (and min/max) describe the time between
     consecutive frames of this id -- a low, consistent interval suggests a
@@ -202,8 +201,8 @@ class BmwCanIdCycleStats:
 
 
 @dataclass
-class BmwByteVariability:
-    """Per-byte-offset variability for one BMW CAN identifier.
+class RawCanByteVariability:
+    """Per-byte-offset variability for one raw CAN identifier.
 
     A shape/triage hint only (which byte positions change vs stay
     constant across the capture) -- NOT a meaning/name guess. See
@@ -220,14 +219,14 @@ class BmwByteVariability:
 
 
 @dataclass
-class BmwTelemetryCandidateEntry:
+class RawCanTelemetryCandidateEntry:
     """A (CAN id, byte offset) worth polling for a live gauge/telemetry
     display -- flagged purely because its value changed across repeated
     reads in the capture. Mirrors frame_analyser.py's
     TelemetryCandidateEntry structurally (for output/report parity with
     the Ford pipeline), but does NOT claim to know what any byte
     physically represents -- no module/signal name or formula exists for
-    BMW yet (see AGENTS.md / reference/bmw_ecu_reference.md).
+    the source OEM yet (see AGENTS.md).
     """
 
     frame_id: str
@@ -241,14 +240,39 @@ class BmwTelemetryCandidateEntry:
 
 
 @dataclass
-class BmwAnalysisResult:
-    """The result of analysing a collection of BMW capture frames."""
+class RawCanAnalysisResult:
+    """The result of analysing OEM-neutral raw CAN frames."""
 
-    frames: list[BmwFrame] = field(default_factory=list)
-    canid_stats: dict[str, BmwCanIdCycleStats] = field(default_factory=dict)
-    byte_variability: list[BmwByteVariability] = field(default_factory=list)
-    telemetry_candidates: list[BmwTelemetryCandidateEntry] = field(default_factory=list)
+    frames: list[RawCanFrame] = field(default_factory=list)
+    canid_stats: dict[str, RawCanIdCycleStats] = field(default_factory=dict)
+    byte_variability: list[RawCanByteVariability] = field(default_factory=list)
+    telemetry_candidates: list[RawCanTelemetryCandidateEntry] = field(default_factory=list)
     summary: dict[str, object] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class KnownRawCanSignal:
+    """One independently sourced and capture-validated broadcast CAN signal."""
+
+    frame_id: str
+    message_name: str
+    signal_name: str
+    start_bit: int
+    bit_length: int
+    byte_order: str
+    formula: str
+    unit: str
+    confidence: str
+    notes: str
+
+
+# Compatibility aliases for the established BMW pipeline. New OEM pipelines
+# use the neutral RawCan* names above.
+BmwFrame = RawCanFrame
+BmwCanIdCycleStats = RawCanIdCycleStats
+BmwByteVariability = RawCanByteVariability
+BmwTelemetryCandidateEntry = RawCanTelemetryCandidateEntry
+BmwAnalysisResult = RawCanAnalysisResult
 
 

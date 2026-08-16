@@ -14,6 +14,7 @@ from frame_analyser import (  # noqa: E402
         OBD2_PID_NAMES,
     FrameValidator,
     IsoTpDecoder,
+    IsoTpReassembler,
     ModuleDiscoveryAnalyser,
     SessionAnalyser,
     StatisticsEngine,
@@ -23,7 +24,9 @@ from frame_analyser import (  # noqa: E402
     build_known_did_reference,
 )
 from log_reader import CSV_HEADER, read_log_file  # noqa: E402
+from hyundai_signals import HYUNDAI_CAN_ID_NAMES, HYUNDAI_CONFIRMED_SIGNALS  # noqa: E402
 from models import RawLogEntry  # noqa: E402
+from raw_can_analyser import RawCanFrameParser, analyse as analyse_raw_can  # noqa: E402
 
 
 def test_analyse_empty_entries_returns_empty_result():
@@ -38,6 +41,56 @@ def test_analyse_empty_entries_returns_empty_result():
 
 def _entry(raw_text: str, line_number: int = 1) -> RawLogEntry:
     return RawLogEntry(line_number=line_number, raw_text=raw_text, source_file="log_005.csv")
+
+
+def test_raw_can_parser_preserves_extended_protocol_metadata_without_decoding():
+    entry = RawLogEntry(
+        line_number=2,
+        raw_text=(
+            "46701,CAN1,4F0,0,0,8,-,-,FORD_UDS22,"
+            "00-00-00-00-00-00-00-00"
+        ),
+        source_file="log_001.csv",
+        column_layout="10col_protocol",
+    )
+    frame = RawCanFrameParser().parse(entry)
+
+    assert frame is not None
+    assert frame.frame_id == "4F0"
+    assert frame.protocol == "FORD_UDS22"
+    assert frame.payload == bytes(8)
+
+
+def test_raw_can_analysis_does_not_assign_pid_or_module_meanings():
+    entries = [
+        RawLogEntry(1, "1,CAN1,100,0,0,8,00-00-00-00-00-00-00-00", "x.csv"),
+        RawLogEntry(2, "2,CAN1,100,0,0,8,01-00-00-00-00-00-00-00", "x.csv"),
+    ]
+    result = analyse_raw_can(entries)
+
+    assert result.summary["total_frames"] == 2
+    assert result.telemetry_candidates[0].frame_id == "100"
+    assert result.telemetry_candidates[0].byte_offset == 0
+    assert result.telemetry_candidates[0].observed_pattern == "On/Off switch"
+
+
+def test_hyundai_confirmed_signals_are_evidence_limited():
+    signals = {(entry.frame_id, entry.signal_name) for entry in HYUNDAI_CONFIRMED_SIGNALS}
+
+    assert len(signals) == 9
+    assert ("316", "Engine Speed") in signals
+    assert ("545", "Module Voltage") in signals
+    assert ("43F", "Current Gear") not in signals
+    assert ("5A2", "Unknown") not in signals
+    assert all(entry.confidence == "confirmed" for entry in HYUNDAI_CONFIRMED_SIGNALS)
+
+
+def test_hyundai_can_id_names_cover_the_observed_capture_ids():
+    assert len(HYUNDAI_CAN_ID_NAMES) == 17
+    assert HYUNDAI_CAN_ID_NAMES["316"][0] == "EMS1"
+    assert HYUNDAI_CAN_ID_NAMES["316"][2] == "confirmed"
+    assert HYUNDAI_CAN_ID_NAMES["43F"][0] == "TCU1"
+    assert HYUNDAI_CAN_ID_NAMES["5A2"][2] == "unidentified"
 
 
 def test_frame_parser_decodes_single_frame_uds_request():
@@ -73,6 +126,53 @@ def test_iso_tp_decoder_single_frame():
     assert frame_type == "single_frame"
     assert length == 2
     assert uds_data == bytes.fromhex("1003")
+
+
+def _multi_frame_entries(uds_payload: bytes) -> list[RawLogEntry]:
+    total_len = len(uds_payload)
+    first_payload = bytes(
+        [0x10 | ((total_len >> 8) & 0x0F), total_len & 0xFF]
+    ) + uds_payload[:6]
+    entries = [
+        _entry(
+            f"100000,CAN1,7E8,0,0,8,{first_payload.hex('-').upper()}",
+            1,
+        )
+    ]
+    for position, offset in enumerate(range(6, total_len, 7), start=1):
+        fragment = uds_payload[offset : offset + 7]
+        can_payload = bytes([0x20 | (position % 16)]) + fragment
+        entries.append(
+            _entry(
+                f"{100000 + position},CAN1,7E8,0,0,{len(can_payload)},"
+                f"{can_payload.hex('-').upper()}",
+                position + 1,
+            )
+        )
+    return entries
+
+
+def test_iso_tp_reassembler_handles_sequence_number_wrap():
+    uds_payload = bytes([0x62, 0xF1, 0x90]) + bytes(range(122))
+    frames = [FrameParser().parse(entry) for entry in _multi_frame_entries(uds_payload)]
+
+    IsoTpReassembler().reassemble(frames)
+
+    assert frames[0].fields["iso_tp_reassembly_status"] == "complete"
+    assert frames[0].fields["uds_data_hex"] == uds_payload.hex(" ").upper()
+    assert all(frame.valid for frame in frames)
+
+
+def test_iso_tp_reassembler_preserves_adjacent_out_of_order_frames():
+    uds_payload = bytes([0x62, 0xF1, 0x90]) + bytes(range(24))
+    entries = _multi_frame_entries(uds_payload)
+    entries[1], entries[2] = entries[2], entries[1]
+    frames = [FrameParser().parse(entry) for entry in entries]
+
+    IsoTpReassembler().reassemble(frames)
+
+    assert frames[0].fields["iso_tp_reassembly_status"] == "complete_reordered"
+    assert frames[0].fields["uds_data_hex"] == uds_payload.hex(" ").upper()
 
 
 def test_uds_decoder_negative_response():
@@ -174,6 +274,8 @@ def test_known_reference_includes_new_confirmed_did_and_pids():
     expected = {
         ("DID", "404C"): ("raw / 10", "km"),
         ("DID", "402B"): ("raw - 127", "A"),
+        ("DID", "0579"): ("B", "%"),
+        ("DID", "1E1F"): ("raw", "gear"),
         ("PID", "0F"): ("raw - 40", "degC"),
         ("PID", "10"): ("raw / 100", "g/s"),
         ("PID", "11"): ("raw * 100 / 255", "%"),
