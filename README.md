@@ -1,5 +1,12 @@
 # Decoding 2000
 
+Passive broadcast CAN signals are kept separate from diagnostic PIDs/DIDs.
+Curated definitions live in `reference/can_signals.csv`; pipeline runs write
+unidentified changing-byte candidates and raw value transitions to
+`output/ford/signals/`. A signal may only be marked `confirmed` when its bit
+layout and meaning are supported by controlled field evidence or an independent
+public reference.
+
 Tools for reading, decoding, and exporting frame/log data from the Decoder 2000 project.
 
 ## Project layout

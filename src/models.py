@@ -267,6 +267,63 @@ class KnownRawCanSignal:
     notes: str
 
 
+@dataclass(frozen=True)
+class CanSignalDefinition:
+    """A curated passive broadcast CAN signal definition."""
+
+    bus: str
+    frame_id: str
+    signal_name: str
+    start_bit: int
+    bit_length: int
+    byte_order: str
+    formula: str
+    unit: str
+    confidence: str
+    evidence: str
+
+
+@dataclass
+class CanSignalCandidate:
+    """An observed changing byte region, without an inferred meaning."""
+
+    bus: str
+    frame_id: str
+    byte_offset: int
+    start_bit: int
+    bit_length: int
+    active_bit_mask: int
+    frame_count: int
+    distinct_value_count: int
+    first_seen_ms: int
+    last_seen_ms: int
+    sample_values: list[str] = field(default_factory=list)
+    observed_pattern: str = ""
+    signal_name: str = ""
+    confidence: str = "unidentified"
+    evidence: str = ""
+
+
+@dataclass
+class CanSignalObservation:
+    """One raw value transition for a curated or candidate signal region."""
+
+    bus: str
+    frame_id: str
+    byte_offset: int
+    timestamp_ms: int
+    raw_value: int
+
+
+@dataclass
+class CanSignalAnalysisResult:
+    """Passive broadcast signal candidates and their observations."""
+
+    candidates: list[CanSignalCandidate] = field(default_factory=list)
+    observations: list[CanSignalObservation] = field(default_factory=list)
+    definitions: list[CanSignalDefinition] = field(default_factory=list)
+
+
 # Compatibility aliases for the established BMW pipeline. New OEM pipelines
 # use the neutral RawCan* names above.
 BmwFrame = RawCanFrame

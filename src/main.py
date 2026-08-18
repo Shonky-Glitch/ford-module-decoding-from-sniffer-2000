@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from can_signal_analyser import analyse_entries, load_signal_database
+from can_signal_exporters import export_signal_candidates, export_signal_observations
 from exporters import (
     export_canid_summary_csv,
     export_csv,
@@ -24,6 +26,7 @@ from log_reader import RawLogEntry, read_all_logs
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT_DIR = REPO_ROOT / "input" / "ford"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "output" / "ford"
+CAN_SIGNAL_DATABASE = REPO_ROOT / "reference" / "can_signals.csv"
 
 # Source-log stems (filename without extension) that have been identified as
 # useful diagnostic references for building the future GreatScan 3.5
@@ -94,8 +97,13 @@ def main(argv: list[str] | None = None) -> int:
 
     entries = read_all_logs(args.input_dir, args.pattern)
     result = analyse(entries)
+    signal_result = analyse_entries(entries, load_signal_database(CAN_SIGNAL_DATABASE))
 
     _export_all(result, args.output_dir)
+    export_signal_candidates(signal_result, args.output_dir / "signals" / "candidates.csv")
+    export_signal_observations(
+        signal_result, args.output_dir / "signals" / "observations.csv"
+    )
     export_greatscan_diagnostics(
         entries, result, args.output_dir / "diagnostics" / "greatscan_3.5"
     )

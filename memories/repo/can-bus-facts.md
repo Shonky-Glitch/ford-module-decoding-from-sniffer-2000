@@ -1,5 +1,19 @@
 # CAN-bus facts
 
+## 2026-08-18 — CAN2 ignition/start capture annotation
+
+- The vehicle operator confirmed the controlled sequence in
+  `input/ford/log_001_ign start.csv` as: KEY ON -> ACC ON -> IGN ON -> START,
+  then a second START, followed by ACC and KEY OUT.
+- Two start/run windows are visible at approximately 26.3-38.8 seconds and
+  74.8-86.3 seconds relative to capture start.
+- Raw broadcast ids `167`, `200`, and `204` visibly correlate with those
+  windows, but their signal names, bit layouts, and scaling are not confirmed.
+  They must remain unidentified until controlled per-state holds isolate the
+  responsible byte/bit fields.
+- Passive broadcast signals now use `reference/can_signals.csv`, separately
+  from the diagnostic PID/DID reference.
+
 ## 2026-08-16 — FORScan discovery and Ford PX2 gateway access
 
 - User confirmed that captures containing both `CAN1` and `CAN2` are from
@@ -52,4 +66,3 @@
   | CAN2 | ABS | `760` | `768` |
   | CAN2 | TRM | `791` | `799` |
   | CAN2 | FCIM | `7A7` | `7AF` |
-
