@@ -14,6 +14,7 @@ from can_signal_exporters import export_signal_candidates, export_signal_observa
 from exporters import (
     export_canid_summary_csv,
     export_csv,
+    export_ford_module_profiles_csv,
     export_json,
     export_known_pids_csv,
     export_module_discovery_csv,
@@ -68,6 +69,7 @@ def _export_all(result: AnalysisResult, output_dir: Path) -> None:
     export_report(result, output_dir / "report.txt")
     export_telemetry_candidates_csv(result, output_dir / "telemetry" / "candidates.csv")
     export_known_pids_csv(result, output_dir / "known_pids.csv")
+    export_ford_module_profiles_csv(output_dir / "ford_module_profiles.csv")
 
 
 def export_greatscan_diagnostics(

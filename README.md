@@ -68,7 +68,13 @@ Decoding 2000/
    - `decoded.csv` / `decoded.json` - every parsed frame
    - `can_id_summary.csv`, `module_discovery.csv`, `report.txt` - statistics/reports
    - `known_pids.csv` - static reference table of every known PID/DID
+   - `ford_module_profiles.csv` - proven bus/address/session/wake profiles and
+     discovery-supported DID allowlists for PCM, TCM, IPC, BdyCM, and GWM
    - `telemetry/candidates.csv` - DIDs whose value changed across repeated reads (candidates for live telemetry), including an `observed_pattern` shape hint and `confidence` level (`confirmed` vs `unidentified`)
+
+   `known_pids.csv` is module-aware: a DID shared by multiple ECUs receives a
+   separate row per module. `supported_status` distinguishes DIDs proven by a
+   discovery scan from confirmed gauges added from earlier controlled tests.
 
    To decode a single log (or subset) in isolation instead of merging all of `input/ford/`, use:
 

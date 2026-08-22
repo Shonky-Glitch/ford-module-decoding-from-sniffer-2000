@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import csv
 
+from ford_profiles import FORD_MODULE_PROFILES, FORD_PROFILE_BY_NAME
 from models import (
     AnalysisResult,
     CanIdStats,
@@ -423,11 +424,12 @@ class IsoTpReassembler:
         self._uds = UdsDecoder()
 
     def reassemble(self, frames: list[Frame]) -> None:
-        active: dict[tuple[object, str], dict[str, object]] = {}
+        active: dict[tuple[str | None, object, str], dict[str, object]] = {}
 
         for frame in frames:
             iso_tp_type = frame.fields.get("iso_tp_type")
-            key = (frame.fields.get("bus"), frame.frame_id)
+            source_file = frame.source.source_file if frame.source else None
+            key = (source_file, frame.fields.get("bus"), frame.frame_id)
 
             if iso_tp_type == "first_frame":
                 if key in active:
@@ -1517,6 +1519,15 @@ DID_MODULE_HINTS: dict[str, str] = {
     "DD05": "PCM",
 }
 
+# DIDs explicitly confirmed in more than one physical module.  The legacy
+# DID_MODULE_HINTS table retains its primary module for compatibility, while
+# this table lets the exported reference use the correct module+DID key.
+DID_ADDITIONAL_MODULE_HINTS: dict[str, tuple[str, ...]] = {
+    "1505": ("PCM",),
+    "F40C": ("PCM",),
+    "F40D": ("PCM",),
+}
+
 # Structured (formula, unit) pair for every currently-confirmed DID/PID
 # above, extracted verbatim from that entry's notes text. This exists
 # purely so downstream consumers (e.g. GreatScan 3.5's cross-repo porting
@@ -1577,40 +1588,74 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
 
 
 def build_known_did_reference() -> list[KnownDidEntry]:
-    """Build the static "known PIDs/DIDs by module" reference table.
+    """Build a module-aware Ford PID/DID reference.
 
-    Combines DID_NAME_HYPOTHESES (name/confidence/notes) with
-    DID_MODULE_HINTS (which module each DID was observed under) and
-    CONFIRMED_MODULE_NAMES (module name -> request arbitration id). This is
-    a reference listing, not derived from any one capture's frames -- it
-    reflects everything recorded in code so far, confirmed and hypothesis
-    alike (each clearly labelled via `confidence`).
+    Discovery-supported DIDs start as ``supported_unresolved``.  Curated
+    names/formulas are then overlaid only for the module(s) in which they
+    were confirmed.  The composite module+DID key prevents common Ford
+    identification DIDs from colliding across ECUs.
     """
-    entries: list[KnownDidEntry] = []
-    for did, module_name in DID_MODULE_HINTS.items():
+    by_key: dict[tuple[str, str, str], KnownDidEntry] = {}
+
+    for profile in FORD_MODULE_PROFILES:
+        for did in profile.discovered_dids:
+            by_key[(profile.name, "DID", did)] = KnownDidEntry(
+                module_name=profile.name,
+                request_id=profile.request_id,
+                response_id=profile.response_id,
+                bus=profile.bus,
+                did=did,
+                possible_name=f"Unknown DID {did}",
+                confidence="supported_unresolved",
+                notes=(
+                    "Positive UDS 0x62 response observed during module discovery; "
+                    "meaning, byte layout, scaling and unit are not yet confirmed. "
+                    f"Coverage: {profile.discovery_coverage}."
+                ),
+                code_type="DID",
+                supported_status="discovered_supported",
+                entry_session=profile.entry_session,
+                exit_session=profile.exit_session,
+            )
+
+    curated_modules: list[tuple[str, str]] = list(DID_MODULE_HINTS.items())
+    curated_modules.extend(
+        (did, module_name)
+        for did, module_names in DID_ADDITIONAL_MODULE_HINTS.items()
+        for module_name in module_names
+    )
+    for did, module_name in curated_modules:
         possible_name, confidence, notes = DID_NAME_HYPOTHESES.get(
             did, ("(unnamed)", "unidentified", "")
         )
-        # CONFIRMED_MODULE_NAMES maps request_id -> module_name; find the
-        # request id whose name matches module_name.
-        request_id = next(
-            (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name),
-            "?",
+        profile = FORD_PROFILE_BY_NAME.get(module_name)
+        request_id = profile.request_id if profile else next(
+            (rid for rid, name in CONFIRMED_MODULE_NAMES.items() if name == module_name), "?"
         )
         formula, unit = DID_PID_FORMULA_UNITS.get(did, ("", ""))
-        entries.append(
-            KnownDidEntry(
-                module_name=module_name,
-                request_id=request_id,
-                did=did,
-                possible_name=possible_name,
-                confidence=confidence,
-                notes=notes,
-                code_type="DID",
-                formula=formula,
-                unit=unit,
-            )
+        discovered = bool(profile and did in profile.discovered_dids)
+        by_key[(module_name, "DID", did)] = KnownDidEntry(
+            module_name=module_name,
+            request_id=request_id,
+            response_id=profile.response_id if profile else "",
+            bus=profile.bus if profile else "",
+            did=did,
+            possible_name=possible_name,
+            confidence=confidence,
+            notes=notes,
+            code_type="DID",
+            formula=formula,
+            unit=unit,
+            supported_status=(
+                "discovered_supported_confirmed" if discovered and confidence == "confirmed"
+                else "discovered_supported" if discovered
+                else "confirmed_gauge" if confidence == "confirmed"
+                else "observed_supported_unresolved"
+            ),
+            entry_session=profile.entry_session if profile else "",
+            exit_session=profile.exit_session if profile else "",
         )
+
     for pid, module_name in OBD2_PID_MODULE_HINTS.items():
         possible_name, confidence, notes = OBD2_PID_NAMES.get(
             pid, ("(unnamed)", "unidentified", "")
@@ -1620,10 +1665,12 @@ def build_known_did_reference() -> list[KnownDidEntry]:
             "?",
         )
         formula, unit = DID_PID_FORMULA_UNITS.get(pid, ("", ""))
-        entries.append(
-            KnownDidEntry(
+        profile = FORD_PROFILE_BY_NAME.get(module_name)
+        by_key[(module_name, "PID", pid)] = KnownDidEntry(
                 module_name=module_name,
                 request_id=request_id,
+                response_id=profile.response_id if profile else "",
+                bus=profile.bus if profile else "",
                 did=pid,
                 possible_name=possible_name,
                 confidence=confidence,
@@ -1631,8 +1678,11 @@ def build_known_did_reference() -> list[KnownDidEntry]:
                 code_type="PID",
                 formula=formula,
                 unit=unit,
-            )
+                supported_status="standard_supported",
+                entry_session=profile.entry_session if profile else "",
+                exit_session=profile.exit_session if profile else "",
         )
+    entries = list(by_key.values())
     entries.sort(key=lambda e: (e.module_name, e.code_type, e.did))
     return entries
 

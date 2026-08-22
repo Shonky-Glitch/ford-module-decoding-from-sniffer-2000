@@ -23,6 +23,7 @@ from frame_analyser import (  # noqa: E402
     analyse,
     build_known_did_reference,
 )
+from ford_profiles import FORD_PROFILE_BY_NAME  # noqa: E402
 from log_reader import CSV_HEADER, CSV_HEADER_DISCOVERY, read_log_file  # noqa: E402
 from hyundai_signals import HYUNDAI_CAN_ID_NAMES, HYUNDAI_CONFIRMED_SIGNALS  # noqa: E402
 from models import (  # noqa: E402
@@ -164,6 +165,19 @@ def test_iso_tp_reassembler_handles_sequence_number_wrap():
     assert frames[0].fields["iso_tp_reassembly_status"] == "complete"
     assert frames[0].fields["uds_data_hex"] == uds_payload.hex(" ").upper()
     assert all(frame.valid for frame in frames)
+
+
+def test_iso_tp_reassembler_never_crosses_source_files():
+    first = _entry("100000,CAN1,7E9,0,0,8,10-0D-62-F1-5F-08-06-01", 1)
+    first.source_file = "capture_a.csv"
+    consecutive = _entry("100001,CAN1,7E9,0,0,8,21-02-03-04-05-06-07-00", 1)
+    consecutive.source_file = "capture_b.csv"
+    frames = [FrameParser().parse(first), FrameParser().parse(consecutive)]
+
+    IsoTpReassembler().reassemble(frames)
+
+    assert frames[0].fields["iso_tp_reassembly_status"] == "incomplete"
+    assert frames[1].fields["iso_tp_reassembly_status"] == "orphan"
 
 
 def test_iso_tp_reassembler_preserves_adjacent_out_of_order_frames():
@@ -335,6 +349,28 @@ def test_known_reference_includes_new_confirmed_did_and_pids():
         assert entries[key].confidence == "confirmed"
         assert entries[key].formula == formula
         assert entries[key].unit == unit
+
+
+def test_module_aware_profiles_merge_discovery_and_confirmed_gauges():
+    entries = {
+        (entry.module_name, entry.code_type, entry.did): entry
+        for entry in build_known_did_reference()
+    }
+
+    # Shared identification DIDs remain separate module records.
+    for module in ("PCM", "TCM", "IPC", "BdyCM", "GWM"):
+        assert (module, "DID", "0202") in entries
+        assert entries[(module, "DID", "0202")].request_id == (
+            FORD_PROFILE_BY_NAME[module].request_id
+        )
+
+    # Confirmed gauges outside partial discovery coverage are retained.
+    assert entries[("TCM", "DID", "1E1B")].formula == "raw / 4"
+    assert entries[("IPC", "DID", "404C")].formula == "raw / 10"
+    assert entries[("BdyCM", "DID", "402A")].formula == "(raw / 20) + 6"
+    assert entries[("PCM", "DID", "F40C")].formula == "raw / 4"
+
+    assert entries[("GWM", "DID", "F1D4")].confidence == "supported_unresolved"
 
 
 def test_every_confirmed_reference_has_exactly_one_formula():

@@ -9,6 +9,7 @@ import csv
 import json
 from pathlib import Path
 
+from ford_profiles import FORD_MODULE_PROFILES
 from models import AnalysisResult
 
 
@@ -260,12 +261,17 @@ def export_known_pids_csv(result: AnalysisResult, output_path: Path) -> None:
             [
                 "module_name",
                 "code_type",
+                "bus",
                 "request_id",
+                "response_id",
                 "did",
+                "supported_status",
                 "possible_name",
                 "confidence",
                 "formula",
                 "unit",
+                "entry_session",
+                "exit_session",
                 "notes",
             ]
         )
@@ -274,13 +280,43 @@ def export_known_pids_csv(result: AnalysisResult, output_path: Path) -> None:
                 [
                     entry.module_name,
                     entry.code_type,
+                    entry.bus,
                     entry.request_id,
+                    entry.response_id,
                     entry.did,
+                    entry.supported_status,
                     entry.possible_name,
                     entry.confidence,
                     entry.formula,
                     entry.unit,
+                    entry.entry_session,
+                    entry.exit_session,
                     entry.notes,
+                ]
+            )
+
+
+def export_ford_module_profiles_csv(output_path: Path) -> None:
+    """Write the proven Ford access/session profiles in machine-readable form."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "module_name", "bus", "baud_bps", "request_id", "response_id",
+                "entry_session", "reachability_did", "exit_session",
+                "wake_sequence", "discovery_coverage", "discovered_did_count",
+                "discovered_dids",
+            ]
+        )
+        for profile in FORD_MODULE_PROFILES:
+            writer.writerow(
+                [
+                    profile.name, profile.bus, 500000, profile.request_id,
+                    profile.response_id, profile.entry_session,
+                    profile.reachability_did, profile.exit_session,
+                    profile.wake_sequence, profile.discovery_coverage,
+                    len(profile.discovered_dids), " ".join(profile.discovered_dids),
                 ]
             )
 

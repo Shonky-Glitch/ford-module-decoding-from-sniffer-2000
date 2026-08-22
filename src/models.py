@@ -161,6 +161,11 @@ class KnownDidEntry:
     code_type: str = "DID"
     formula: str = ""
     unit: str = ""
+    bus: str = ""
+    response_id: str = ""
+    supported_status: str = ""
+    entry_session: str = ""
+    exit_session: str = ""
 
 
 @dataclass
