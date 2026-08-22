@@ -31,6 +31,13 @@ CSV_HEADER_EXTENDED_NO_MODE = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
 # in this capture, same as the other extended layouts.
 CSV_HEADER_BMW_PROTOCOL = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex"
 
+# Discovery-tool capture layout first seen in
+# input/ford/FORD_003 first 2min dis on IPC.CSV (approved 2026-08-20).
+# Unlike the CAN Sniffer layouts above it supplies scan/direction metadata
+# and uses a space-separated payload, but still represents ordinary CAN
+# frames and is tagged separately so parsers never infer it by column count.
+CSV_HEADER_DISCOVERY = "x2_ms,scan,bus,direction,id,dlc,data"
+
 # Tags stored on RawLogEntry.column_layout so FrameParser can disambiguate
 # column layouts that share the same column COUNT but different meaning
 # (CSV_HEADER_EXTENDED vs CSV_HEADER_BMW_PROTOCOL are both 10 columns).
@@ -38,12 +45,14 @@ COLUMN_LAYOUT_7 = "7col"
 COLUMN_LAYOUT_9_NO_MODE = "9col_no_mode"
 COLUMN_LAYOUT_10_MODE = "10col_mode"
 COLUMN_LAYOUT_10_PROTOCOL = "10col_protocol"
+COLUMN_LAYOUT_7_DISCOVERY = "7col_discovery"
 
 _HEADER_TO_LAYOUT = {
     CSV_HEADER: COLUMN_LAYOUT_7,
     CSV_HEADER_EXTENDED: COLUMN_LAYOUT_10_MODE,
     CSV_HEADER_EXTENDED_NO_MODE: COLUMN_LAYOUT_9_NO_MODE,
     CSV_HEADER_BMW_PROTOCOL: COLUMN_LAYOUT_10_PROTOCOL,
+    CSV_HEADER_DISCOVERY: COLUMN_LAYOUT_7_DISCOVERY,
 }
 
 

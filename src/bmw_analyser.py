@@ -45,7 +45,11 @@ class BmwFrameParser:
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
         protocol: str | None = None
-        if len(row) == 7:
+        if len(row) == 7 and entry.column_layout == "7col_discovery":
+            ms_str, _scan, bus, _direction, id_hex, dlc_str, data_hex = (
+                col.strip() for col in row
+            )
+        elif len(row) == 7:
             ms_str, bus, id_hex, _ext_str, _rtr_str, dlc_str, data_hex = (
                 col.strip() for col in row
             )

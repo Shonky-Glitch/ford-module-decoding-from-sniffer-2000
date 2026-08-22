@@ -23,9 +23,12 @@ from frame_analyser import (  # noqa: E402
     analyse,
     build_known_did_reference,
 )
-from log_reader import CSV_HEADER, read_log_file  # noqa: E402
+from log_reader import CSV_HEADER, CSV_HEADER_DISCOVERY, read_log_file  # noqa: E402
 from hyundai_signals import HYUNDAI_CAN_ID_NAMES, HYUNDAI_CONFIRMED_SIGNALS  # noqa: E402
-from models import RawLogEntry  # noqa: E402
+from models import (  # noqa: E402
+    KnownDidEntry,
+    RawLogEntry,
+)
 from raw_can_analyser import RawCanFrameParser, analyse as analyse_raw_can  # noqa: E402
 
 
@@ -208,6 +211,41 @@ def test_module_discovery_finds_paired_response():
     assert request_entry.module_present is True
 
 
+def test_module_discovery_lists_supported_dids_with_curated_metadata():
+    frames = [
+        FrameParser().parse(_entry("100000,CAN2,720,0,0,8,03-22-40-4C-00-00-00-00", 1)),
+        FrameParser().parse(_entry("100010,CAN2,728,0,0,8,06-62-40-4C-1B-AF-99-00", 2)),
+        FrameParser().parse(_entry("100020,CAN2,720,0,0,8,03-22-02-02-00-00-00-00", 3)),
+        FrameParser().parse(_entry("100030,CAN2,728,0,0,8,04-62-02-02-00-00-00-00", 4)),
+    ]
+    known = [
+        KnownDidEntry(
+            module_name="IPC",
+            request_id="720",
+            did="404C",
+            possible_name="Total Distance (Odometer)",
+            confidence="confirmed",
+            formula="raw / 10",
+            unit="km",
+        )
+    ]
+
+    request_entry = next(
+        entry
+        for entry in ModuleDiscoveryAnalyser({"720": "IPC"}).discover(frames, known)
+        if entry.arbitration_id == "720"
+    )
+
+    assert [(code.code_type, code.code) for code in request_entry.supported_codes] == [
+        ("DID", "0202"),
+        ("DID", "404C"),
+    ]
+    assert request_entry.supported_codes[0].confidence == "unidentified"
+    assert request_entry.supported_codes[1].possible_name == "Total Distance (Odometer)"
+    assert request_entry.supported_codes[1].formula == "raw / 10"
+    assert request_entry.supported_codes[1].unit == "km"
+
+
 def test_telemetry_candidate_analyser_flags_changing_did_value():
     # Real DID (033C) from input/log_*.csv PCM sweep, values observed to
     # drift between 01-52 and 01-53 across repeated reads.
@@ -276,6 +314,13 @@ def test_known_reference_includes_new_confirmed_did_and_pids():
         ("DID", "402B"): ("raw - 127", "A"),
         ("DID", "0579"): ("B", "%"),
         ("DID", "1E1F"): ("raw", "gear"),
+        ("DID", "1E1D"): ("raw / 1000", "V"),
+        ("DID", "1E12"): ("raw", "gear"),
+        ("DID", "1E1B"): ("raw / 4", "rpm"),
+        ("DID", "1505"): ("raw / 128", "km/h"),
+        ("DID", "F40C"): ("raw / 4", "rpm"),
+        ("DID", "F40D"): ("raw", "km/h"),
+        ("DID", "F442"): ("raw / 1000", "V"),
         ("PID", "0F"): ("raw - 40", "degC"),
         ("PID", "10"): ("raw / 100", "g/s"),
         ("PID", "11"): ("raw * 100 / 255", "%"),
@@ -315,6 +360,29 @@ def test_read_log_file_skips_csv_header(tmp_path):
     entries = read_log_file(path)
     assert len(entries) == 1
     assert entries[0].raw_text.startswith("100949,")
+
+
+def test_discovery_layout_header_and_frame_are_parsed_explicitly(tmp_path):
+    path = tmp_path / "discovery.csv"
+    path.write_text(
+        CSV_HEADER_DISCOVERY
+        + "\n33123,1,CAN2,TX,720,8,02 10 03 00 00 00 00 00\n",
+        encoding="utf-8",
+    )
+
+    entries = read_log_file(path)
+    assert len(entries) == 1
+    assert entries[0].column_layout == "7col_discovery"
+
+    frame = FrameParser().parse(entries[0])
+    assert frame is not None
+    assert frame.frame_id == "720"
+    assert frame.fields["timestamp_ms"] == 33123
+    assert frame.fields["scan"] == "1"
+    assert frame.fields["direction"] == "TX"
+    assert frame.fields["ext"] is False
+    assert frame.fields["rtr"] is False
+    assert frame.payload == bytes.fromhex("02 10 03 00 00 00 00 00")
 
 
 

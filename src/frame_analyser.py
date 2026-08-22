@@ -26,6 +26,7 @@ from models import (
     ModuleDiscoveryEntry,
     RawLogEntry,
     Session,
+    SupportedDiagnosticCode,
     TelemetryCandidateEntry,
 )
 
@@ -133,6 +134,10 @@ class FrameParser:
 
     Formats observed so far (verified against real input/*.csv captures):
         7 columns:  ms,bus,id_hex,ext,rtr,dlc,data_hex        (log_001-020)
+        7 columns (discovery): x2_ms,scan,bus,direction,id,dlc,data
+                    (FORD_003 first 2min dis on IPC.CSV, approved
+                    2026-08-20) -- space-separated payload plus explicit
+                    scan/direction metadata; no ext/rtr columns.
         10 columns: ms,bus,mode,id_hex,ext,rtr,dlc,pgn,sa,data_hex
                     (log_021 onward, 2026-08-05) -- adds `mode` (e.g.
                     "Listen-Only") and J1939-style `pgn`/`sa` columns, both
@@ -171,7 +176,17 @@ class FrameParser:
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
         protocol: str | None = None
-        if len(row) == 7:
+        scan: str | None = None
+        direction: str | None = None
+        if len(row) == 7 and entry.column_layout == "7col_discovery":
+            ms_str, scan, bus, direction, id_hex, dlc_str, data_hex = (
+                col.strip() for col in row
+            )
+            mode, pgn, sa = None, None, None
+            ext_str, rtr_str = "0", "0"
+            scan = scan or None
+            direction = direction.upper() or None
+        elif len(row) == 7:
             ms_str, bus, id_hex, ext_str, rtr_str, dlc_str, data_hex = (
                 col.strip() for col in row
             )
@@ -266,6 +281,8 @@ class FrameParser:
                 "pgn": pgn,
                 "sa": sa,
                 "protocol": protocol,
+                "scan": scan,
+                "direction": direction,
                 "ext": bool(int(ext_str)),
                 "rtr": bool(int(rtr_str)),
                 "dlc": dlc,
@@ -681,7 +698,11 @@ class ModuleDiscoveryAnalyser:
     def __init__(self, candidate_names: dict[str, str] | None = None) -> None:
         self._candidate_names = candidate_names or {}
 
-    def discover(self, frames: list[Frame]) -> list[ModuleDiscoveryEntry]:
+    def discover(
+        self,
+        frames: list[Frame],
+        known_dids: list[KnownDidEntry] | None = None,
+    ) -> list[ModuleDiscoveryEntry]:
         by_id: dict[str, list[Frame]] = {}
         for frame in frames:
             by_id.setdefault(frame.frame_id, []).append(frame)
@@ -778,7 +799,58 @@ class ModuleDiscoveryAnalyser:
                 )
             )
 
+        self._attach_supported_codes(entries, by_id, known_dids or [])
         return entries
+
+    @staticmethod
+    def _attach_supported_codes(
+        entries: list[ModuleDiscoveryEntry],
+        by_id: dict[str, list[Frame]],
+        known_dids: list[KnownDidEntry],
+    ) -> None:
+        """Attach positively observed Mode 0x22 DIDs and Mode 0x01 PIDs.
+
+        A positive response proves only that the module supports the code.
+        Human-readable metadata comes exclusively from the curated known-DID
+        reference and retains its explicit confidence label.
+        """
+        known = {
+            (item.request_id, item.code_type, item.did): item
+            for item in known_dids
+        }
+
+        for entry in entries:
+            if entry.role != "request" or entry.paired_id is None:
+                continue
+
+            observed: set[tuple[str, str]] = set()
+            for frame in by_id.get(entry.paired_id, []):
+                if frame.fields.get("uds_direction") != "positive_response":
+                    continue
+                uds_data_hex = frame.fields.get("uds_data_hex")
+                if not isinstance(uds_data_hex, str):
+                    continue
+                try:
+                    uds_data = bytes.fromhex(uds_data_hex)
+                except ValueError:
+                    continue
+                if len(uds_data) >= 3 and uds_data[0] == 0x62:
+                    observed.add(("DID", uds_data[1:3].hex().upper()))
+                elif len(uds_data) >= 2 and uds_data[0] == 0x41:
+                    observed.add(("PID", f"{uds_data[1]:02X}"))
+
+            for code_type, code in sorted(observed):
+                reference = known.get((entry.arbitration_id, code_type, code))
+                entry.supported_codes.append(
+                    SupportedDiagnosticCode(
+                        code_type=code_type,
+                        code=code,
+                        possible_name=reference.possible_name if reference else "",
+                        confidence=reference.confidence if reference else "unidentified",
+                        formula=reference.formula if reference else "",
+                        unit=reference.unit if reference else "",
+                    )
+                )
 
     @staticmethod
     def _role_of(id_frames: list[Frame]) -> str:
@@ -997,6 +1069,70 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "contradicts the older reading, so it is not adopted without a "
         "new controlled field correlation. Do not use this DID for a "
         "scaled gauge yet.",
+    ),
+    "1E1D": (
+        "Transmission Fluid Temperature Sensor Voltage",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: raw / 1000 "
+        "= V. Source: user field-verified 2026-08-17 against a live G-scan "
+        "reading captured during input/ford/log_002-TCM.csv. The log's raw "
+        "value 478 gives 0.478 V, matching the photographed 0.47 V display "
+        "to the scan tool's shown precision. The observed raw range "
+        "478-1080 gives a physically plausible 0.478-1.080 V sensor range.",
+    ),
+    "1E12": (
+        "Commanded Gear",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: raw = forward "
+        "gear number. Source: user field-verified 2026-08-17 against a live "
+        "G-scan reading during input/ford/log_002-TCM.csv: raw 6 matched "
+        "the photographed commanded gear 6. Non-forward values remain "
+        "unmapped.",
+    ),
+    "1E1B": (
+        "Output Shaft Speed",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: raw / 4 = rpm. "
+        "Source: user field-verified 2026-08-17 against a live G-scan "
+        "reading during input/ford/log_002-TCM.csv: raw 11730 / 4 = "
+        "2932.50 rpm, exactly matching the photographed 2932.50 rpm.",
+    ),
+    "1505": (
+        "Vehicle Speed (High Resolution)",
+        "confirmed",
+        "Observed from both PCM and TCM diagnostic responses. Equation: "
+        "raw / 128 = km/h. Source: user field-verified 2026-08-17 against "
+        "a live G-scan reading during input/ford/log_002-TCM.csv: raw "
+        "15694 / 128 = 122.609375 km/h, matching the photographed "
+        "122.61 km/h display.",
+    ),
+    "F40C": (
+        "Engine RPM",
+        "confirmed",
+        "Observed from both PCM and TCM diagnostic responses. Equation: "
+        "raw / 4 = rpm. Source: user field-verified 2026-08-17 against a "
+        "live G-scan reading during input/ford/log_002-TCM.csv: raw 8192 / "
+        "4 = 2048 rpm, exactly matching the photographed 2048.00 rpm.",
+    ),
+    "F40D": (
+        "Vehicle Speed",
+        "confirmed",
+        "Observed from both PCM and TCM diagnostic responses. Equation: "
+        "raw = km/h. Source: user field-verified 2026-08-17 against live "
+        "G-scan readings: input/ford/log_001- PCM.csv contains repeated raw "
+        "104 and 109 values matching photographed 104 km/h and 109 km/h; "
+        "input/ford/log_002-TCM.csv contains raw 122 matching the "
+        "photographed 122 km/h.",
+    ),
+    "F442": (
+        "Control Module Supply Voltage",
+        "confirmed",
+        "Observed from both PCM and TCM diagnostic responses. Equation: "
+        "raw / 1000 = V. Source: user field-verified 2026-08-17 against "
+        "live G-scan readings. In input/ford/log_001- PCM.csv, raw 14360 "
+        "and 14400 match photographed 14.36 V and 14.40 V; in "
+        "input/ford/log_002-TCM.csv, raw 14034 gives 14.034 V, matching "
+        "the photographed 14.03 V supply-voltage display.",
     ),
     "1E1F": (
         "Transmission Gear Engaged",
@@ -1357,6 +1493,13 @@ DID_MODULE_HINTS: dict[str, str] = {
     "03F6": "PCM",
     "03F5": "PCM",
     "1E1C": "TCM",
+    "1E1D": "TCM",
+    "1E12": "TCM",
+    "1E1B": "TCM",
+    "1505": "TCM",
+    "F40C": "TCM",
+    "F40D": "TCM",
+    "F442": "TCM",
     "1E1F": "PCM",
     "0522": "PCM",
     "0579": "PCM",
@@ -1401,6 +1544,13 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
     "03F5": ("raw * 5", "degC"),
     "051C": ("raw - 40", "degC"),
     "1E1F": ("raw", "gear"),
+    "1E1D": ("raw / 1000", "V"),
+    "1E12": ("raw", "gear"),
+    "1E1B": ("raw / 4", "rpm"),
+    "1505": ("raw / 128", "km/h"),
+    "F40C": ("raw / 4", "rpm"),
+    "F40D": ("raw", "km/h"),
+    "F442": ("raw / 1000", "V"),
     "9938": ("raw", "%"),
     "9B03": ("raw", "%"),
     # OBD2_PID_NAMES (standard SAE J1979 Mode 0x01 PIDs)
@@ -1636,9 +1786,11 @@ def build_analysis_result(
     result.errors = list(errors) if errors else []
     result.canid_stats = stats_engine.compute(frames)
     result.sessions = session_analyser.build_sessions(frames)
-    result.module_discovery = module_discovery_analyser.discover(frames)
-    result.telemetry_candidates = telemetry_candidate_analyser.discover(frames)
     result.known_dids = build_known_did_reference()
+    result.module_discovery = module_discovery_analyser.discover(
+        frames, result.known_dids
+    )
+    result.telemetry_candidates = telemetry_candidate_analyser.discover(frames)
 
     result.summary["total_entries"] = total_entries
     result.summary["total_frames"] = len(frames)

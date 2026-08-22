@@ -67,6 +67,22 @@ class Session:
 
 
 @dataclass
+class SupportedDiagnosticCode:
+    """A PID/DID that returned positively from one discovered module.
+
+    Names and scaling are attached only from the curated reference tables;
+    an observed positive response by itself proves support, not meaning.
+    """
+
+    code_type: str  # "DID" | "PID"
+    code: str
+    possible_name: str = ""
+    confidence: str = "unidentified"
+    formula: str = ""
+    unit: str = ""
+
+
+@dataclass
 class ModuleDiscoveryEntry:
     """One row of the module-discovery ("available modules") report.
 
@@ -86,6 +102,7 @@ class ModuleDiscoveryEntry:
     first_seen_ms: int | None
     last_seen_ms: int | None
     candidate_module_name: str | None = None
+    supported_codes: list[SupportedDiagnosticCode] = field(default_factory=list)
 
 
 @dataclass

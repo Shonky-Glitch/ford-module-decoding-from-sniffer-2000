@@ -49,6 +49,17 @@ def export_json(result: AnalysisResult, output_path: Path) -> None:
                 "first_seen_ms": entry.first_seen_ms,
                 "last_seen_ms": entry.last_seen_ms,
                 "candidate_module_name": entry.candidate_module_name,
+                "supported_codes": [
+                    {
+                        "code_type": code.code_type,
+                        "code": code.code,
+                        "possible_name": code.possible_name,
+                        "confidence": code.confidence,
+                        "formula": code.formula,
+                        "unit": code.unit,
+                    }
+                    for code in entry.supported_codes
+                ],
             }
             for entry in result.module_discovery
         ],
@@ -149,6 +160,7 @@ def export_module_discovery_csv(result: AnalysisResult, output_path: Path) -> No
                 "first_seen_ms",
                 "last_seen_ms",
                 "candidate_module_name",
+                "supported_pids_dids",
             ]
         )
         for entry in result.module_discovery:
@@ -164,8 +176,26 @@ def export_module_discovery_csv(result: AnalysisResult, output_path: Path) -> No
                     entry.first_seen_ms if entry.first_seen_ms is not None else "",
                     entry.last_seen_ms if entry.last_seen_ms is not None else "",
                     entry.candidate_module_name or "",
+                    "\n".join(
+                        _format_supported_code(code) for code in entry.supported_codes
+                    ),
                 ]
             )
+
+
+def _format_supported_code(code: object) -> str:
+    """Format one supported-code line without implying an unknown meaning."""
+    code_type = getattr(code, "code_type")
+    identifier = getattr(code, "code")
+    confidence = getattr(code, "confidence")
+    name = getattr(code, "possible_name") or "unknown"
+    formula = getattr(code, "formula") or ""
+    unit = getattr(code, "unit") or ""
+    scaling = formula + (f" {unit}" if unit else "") if formula else ""
+    parts = [f"{code_type} {identifier}", name, confidence]
+    if scaling:
+        parts.append(scaling)
+    return " | ".join(parts)
 
 
 def export_telemetry_candidates_csv(result: AnalysisResult, output_path: Path) -> None:
@@ -288,6 +318,8 @@ def export_report(result: AnalysisResult, output_path: Path) -> None:
                 f" ({entry.positive_response_count} pos / "
                 f"{entry.negative_response_count} neg){name}"
             )
+            for code in entry.supported_codes:
+                lines.append(f"    {_format_supported_code(code)}")
 
     if result.known_dids:
         lines.append("")
