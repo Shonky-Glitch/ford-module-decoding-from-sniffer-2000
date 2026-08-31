@@ -33,6 +33,138 @@ F100-F1FF
 F200-FEFF
 ```
 
+## Completed dual-bus functional sweep (2026-08-29)
+
+The vehicle operator completed a read-only `0000-FFFF` sweep using functional
+request ID `7DF` on both buses. The sweep tested `F100-F1FF` first and then all
+remaining DIDs. The source bundle was generated in the separate `x2-interface`
+project at:
+
+```text
+captures/full_sweep_20260829_082902
+```
+
+The bundle manifest records `result=complete`, 65,536 DIDs tested, zero CAN
+transmit failures, 135,002 CSV frame rows, and a duration of 3,490.15 seconds.
+The CSV uses the already-approved discovery layout:
+`x2_ms,scan,bus,direction,id,dlc,data`.
+
+The controller's end-of-sweep summary reported 1,741 positive module/DID
+results, 84 negative responses, and 14 responding modules:
+
+| Module | Bus | Physical pair | Supported in sweep | Negative | Incomplete multi-frame payloads |
+|---|---|---:|---:|---:|---:|
+| PCM | CAN1 | `7E0 -> 7E8` | 417 | 0 | 2 |
+| TCM | CAN1 | `7E1 -> 7E9` | 85 | 0 | 1 |
+| BdyCM | CAN1 | `726 -> 72E` | 404 | 5 | 7 |
+| IPMA | CAN2 | `706 -> 70E` | 39 | 0 | 3 |
+| GWM | CAN2 | `716 -> 71E` | 75 | 0 | 5 |
+| IPC | CAN2 | `720 -> 728` | 127 | 0 | 0 |
+| SCCM | CAN2 | `724 -> 72C` | 36 | 0 | 1 |
+| ACM | CAN2 | `727 -> 72F` | 113 | 17 | 14 |
+| PSCM | CAN2 | `730 -> 738` | 43 | 48 | 0 |
+| RCM | CAN2 | `737 -> 73F` | 126 | 12 | 7 |
+| RTM | CAN2 | `751 -> 759` | 94 | 0 | 1 |
+| ABS | CAN2 | `760 -> 768` | 38 | 2 | 4 |
+| TRM | CAN2 | `791 -> 799` | 87 | 0 | 1 |
+| FCIM | CAN2 | `7A7 -> 7AF` | 57 | 0 | 1 |
+
+The regenerated Decoding 2000 module inventory contains 1,743 unique
+module/DID pairs. That is two more than the controller's in-loop total because
+PSCM and RTM each answered the pre-sweep `0202` reachability request but did
+not repeat that answer when the main loop reached `0202`. Repeated preflight
+and BdyCM wake responses are deduplicated in each module's supported-DID list.
+
+The 47 incomplete multi-frame messages all contain a positive First Frame
+prefix (`62 DID_HI DID_LO`), so the DID support result is proven even though
+the full value payload was not captured. Do not infer a length, value, string,
+formula, or gauge definition from one of those truncated messages. Re-read it
+with a targeted physical request and only one active ECU when the complete
+payload is required.
+
+This functional sweep confirms the responder IDs and supported-DID results in
+the captured session. It does not by itself prove that every DID is available
+through a physical request without a session transition. The physical entry,
+exit, and wake procedures below remain the authoritative access profiles
+where separately proven. Targeted physical access for IPMA, SCCM, ACM, PSCM,
+RCM, RTM, ABS, TRM, and FCIM still needs separate confirmation before those
+modules are added to the machine-readable physical-access profiles.
+
+### Follow-up module captures `FORD_009` through `FORD_017`
+
+Nine approximately 60-second repeated-read captures were checked from
+`input/ford/`:
+
+| Module | Capture | Response | Unique DIDs | Full-sweep set match | Truncated pairs recovered |
+|---|---|---:|---:|---:|---:|
+| IPMA | `FORD_009_IPMA.CSV` | `70E` | 39 | exact | 3/3 |
+| SCCM | `FORD_010_SCCM.CSV` | `72C` | 36 | exact | 1/1 |
+| ACM | `FORD_011_ACM.CSV` | `72F` | 113 | exact | 8/14 |
+| PSCM | `FORD_012_PSCM.CSV` | `738` | 44 | exact | 0/0 |
+| RCM | `FORD_013_RCM.CSV` | `73F` | 126 | exact | 7/7 |
+| RTM | `FORD_014_RTM.CSV` | `759` | 95 | exact | 1/1 |
+| ABS | `FORD_015_ABS.CSV` | `768` | 38 | exact | 4/4 |
+| TRM | `FORD_016_TRM.CSV` | `799` | 87 | exact | 1/1 |
+| FCIM | `FORD_017_FCIM.CSV` | `7AF` | 57 | exact | 1/1 |
+
+These are targeted by response filtering/repeated allowlist reads, but they
+are still functional-request captures: every `0x22` request uses `7DF`.
+The module's physical request ID appears only in `30 00 00` ISO-TP flow-control
+frames. Across all nine files there are zero physical `0x22` requests, zero
+`0x10` session-control requests, and zero `10 81` exits. Therefore these files
+strengthen the supported-DID and payload evidence but do not complete the
+physical-access confirmation requested above.
+
+Six ACM payloads never completed despite 24-26 attempts each:
+
+```text
+800B C008 DE00 EE80 EE81 FD52
+```
+
+Their declared UDS lengths are 75, 244, 53, 147, 219, and 515 bytes
+respectively. The capture contains missing ISO-TP Consecutive Frame sequence
+numbers before the next request. Re-read these DIDs individually using the
+physical `727 -> 72F` pair and a non-zero Flow Control separation time before
+treating their payload length or content as captured.
+
+### Direct physical redo `FORD_020` through `FORD_028`
+
+The nine module checks were repeated with every `0x22` request sent to the
+module's physical request ID. The resulting captures prove direct read access
+for all nine modules:
+
+| Module | Capture | Physical pair | Reachability DID | Supported DIDs |
+|---|---|---:|---:|---:|
+| IPMA | `FORD_020_IPMA.CSV` | `706 -> 70E` | `40BF` | 39 |
+| SCCM | `FORD_021_SCCM.CSV` | `724 -> 72C` | `0202` | 36 |
+| ACM | `FORD_022_ACM.CSV` | `727 -> 72F` | `0202` | 113 |
+| PSCM | `FORD_023_PSCM.CSV` | `730 -> 738` | `0202` | 44 |
+| RCM | `FORD_024_RCM.CSV` | `737 -> 73F` | `0202` | 126 |
+| RTM | `FORD_025_RTM.CSV` | `751 -> 759` | `0202` | 95 |
+| ABS | `FORD_026_ABS.CSV` | `760 -> 768` | `0202` | 38 |
+| FCIM | `FORD_027_FCIM.CSV` | `7A7 -> 7AF` | `0202` | 57 |
+| TRM | `FORD_028_TRM.CSV` | `791 -> 799` | `0202` | 87 |
+
+Each physical DID inventory exactly matches the corresponding full functional
+sweep inventory. These captures contain zero functional `0x22` requests and
+zero `0x10` session-control requests; physical reads receive positive replies
+without an explicit session transition. Record the entry and exit procedures
+for these nine modules as `none required`. `FORD_019_RCM.CSV` contains only a
+header and is an aborted/empty capture; it supplies no evidence and is ignored.
+
+Every supported DID in the nine physical captures has at least one complete
+positive response. Physical addressing also recovered complete payloads for
+all six ACM DIDs that never completed in the earlier functional follow-up:
+
+```text
+800B C008 DE00 EE80 EE81 FD52
+```
+
+Some repeated reads still lost individual ISO-TP Consecutive Frames, so a
+specific attempt may be incomplete, but no module/DID pair is left without a
+complete captured example. These nine modules are now included in
+`FORD_MODULE_PROFILES` in `src/ford_profiles.py`.
+
 ## PCM
 
 ```text

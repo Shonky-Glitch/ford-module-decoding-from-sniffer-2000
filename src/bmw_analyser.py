@@ -28,10 +28,10 @@ class BmwFrameParser:
     """Turns a single raw CSV log entry into a BmwFrame.
 
     Reuses the same column layouts as log_reader.py/frame_analyser.py
-    (7/9/10 columns, disambiguated via RawLogEntry.column_layout for the
-    two 10-column variants) but does NOT run any ISO-TP/UDS decoding over
-    the payload -- BMW's framing has not been confirmed to be ISO 15765-2
-    at all (see reference/bmw_ecu_reference.md).
+    (approved 7/9/10/11-column layouts, disambiguated via
+    RawLogEntry.column_layout) but does NOT run any ISO-TP/UDS decoding over
+    the payload -- BMW's framing has not been confirmed to be ISO 15765-2 at
+    all (see reference/bmw_ecu_reference.md).
     """
 
     def parse(self, entry: RawLogEntry) -> BmwFrame | None:
@@ -45,7 +45,22 @@ class BmwFrameParser:
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
         protocol: str | None = None
-        if len(row) == 7 and entry.column_layout == "7col_discovery":
+        if len(row) == 11 and entry.column_layout == "11col_protocol_direction":
+            (
+                ms_str,
+                bus,
+                id_hex,
+                _ext_str,
+                _rtr_str,
+                dlc_str,
+                _pgn,
+                _sa,
+                protocol,
+                data_hex,
+                _direction,
+            ) = (col.strip() for col in row)
+            protocol = protocol or None
+        elif len(row) == 7 and entry.column_layout == "7col_discovery":
             ms_str, _scan, bus, _direction, id_hex, dlc_str, data_hex = (
                 col.strip() for col in row
             )
@@ -93,7 +108,10 @@ class BmwFrameParser:
                 data_hex,
             ) = (col.strip() for col in row)
         else:
-            raise ValueError(f"expected 7, 9, or 10 columns, got {len(row)}: {row!r}")
+            raise ValueError(
+                "expected an approved 7, 9, 10, or 11-column layout, "
+                f"got {len(row)} columns: {row!r}"
+            )
 
         return BmwFrame(
             frame_id=id_hex.upper(),

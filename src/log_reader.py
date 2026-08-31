@@ -31,6 +31,15 @@ CSV_HEADER_EXTENDED_NO_MODE = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,data_hex"
 # in this capture, same as the other extended layouts.
 CSV_HEADER_BMW_PROTOCOL = "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex"
 
+# Ford diagnostic capture layout first observed in
+# input/ford/log_012-TCM-P,R,N,D.csv and
+# input/ford/log_014-TCM P,R,N,D,S,S-,S+.csv (approved 2026-08-31). This is
+# the 10-column protocol layout above with an explicit TX/RX direction column
+# appended after the payload.
+CSV_HEADER_PROTOCOL_DIRECTION = (
+    "ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex,direction"
+)
+
 # Discovery-tool capture layout first seen in
 # input/ford/FORD_003 first 2min dis on IPC.CSV (approved 2026-08-20).
 # Unlike the CAN Sniffer layouts above it supplies scan/direction metadata
@@ -45,6 +54,7 @@ COLUMN_LAYOUT_7 = "7col"
 COLUMN_LAYOUT_9_NO_MODE = "9col_no_mode"
 COLUMN_LAYOUT_10_MODE = "10col_mode"
 COLUMN_LAYOUT_10_PROTOCOL = "10col_protocol"
+COLUMN_LAYOUT_11_PROTOCOL_DIRECTION = "11col_protocol_direction"
 COLUMN_LAYOUT_7_DISCOVERY = "7col_discovery"
 
 _HEADER_TO_LAYOUT = {
@@ -52,6 +62,7 @@ _HEADER_TO_LAYOUT = {
     CSV_HEADER_EXTENDED: COLUMN_LAYOUT_10_MODE,
     CSV_HEADER_EXTENDED_NO_MODE: COLUMN_LAYOUT_9_NO_MODE,
     CSV_HEADER_BMW_PROTOCOL: COLUMN_LAYOUT_10_PROTOCOL,
+    CSV_HEADER_PROTOCOL_DIRECTION: COLUMN_LAYOUT_11_PROTOCOL_DIRECTION,
     CSV_HEADER_DISCOVERY: COLUMN_LAYOUT_7_DISCOVERY,
 }
 

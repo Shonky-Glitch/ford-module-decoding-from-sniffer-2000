@@ -156,6 +156,10 @@ class FrameParser:
                     two are disambiguated via RawLogEntry.column_layout
                     (set from the file's actual header row in
                     log_reader.py), not column count alone.
+        11 columns: ms,bus,id_hex,ext,rtr,dlc,pgn,sa,protocol,data_hex,
+                    direction (input/ford/log_012 and log_014, approved
+                    2026-08-31) -- extends the protocol layout with explicit
+                    TX/RX metadata after the payload.
 
     `data_hex` is dash-separated CAN payload bytes. Byte 0 is decoded as an
     ISO 15765-2 (ISO-TP) PCI byte, and single-frame UDS payloads are further
@@ -179,7 +183,26 @@ class FrameParser:
         protocol: str | None = None
         scan: str | None = None
         direction: str | None = None
-        if len(row) == 7 and entry.column_layout == "7col_discovery":
+        if len(row) == 11 and entry.column_layout == "11col_protocol_direction":
+            (
+                ms_str,
+                bus,
+                id_hex,
+                ext_str,
+                rtr_str,
+                dlc_str,
+                pgn,
+                sa,
+                protocol,
+                data_hex,
+                direction,
+            ) = (col.strip() for col in row)
+            mode = None
+            pgn = None if pgn in (None, "", "-") else pgn
+            sa = None if sa in (None, "", "-") else sa
+            protocol = protocol or None
+            direction = direction.upper() or None
+        elif len(row) == 7 and entry.column_layout == "7col_discovery":
             ms_str, scan, bus, direction, id_hex, dlc_str, data_hex = (
                 col.strip() for col in row
             )
@@ -241,7 +264,10 @@ class FrameParser:
             pgn = None if pgn in (None, "", "-") else pgn
             sa = None if sa in (None, "", "-") else sa
         else:
-            raise ValueError(f"expected 7, 9, or 10 columns, got {len(row)}: {row!r}")
+            raise ValueError(
+                "expected an approved 7, 9, 10, or 11-column layout, "
+                f"got {len(row)} columns: {row!r}"
+            )
 
 
         ms = int(ms_str)
@@ -822,19 +848,31 @@ class ModuleDiscoveryAnalyser:
         }
 
         for entry in entries:
-            if entry.role != "request" or entry.paired_id is None:
+            if entry.role == "request" and entry.paired_id is not None:
+                request_id = entry.arbitration_id
+                response_id = entry.paired_id
+            elif (
+                entry.role == "response"
+                and entry.paired_id == ModuleDiscoveryAnalyser.FUNCTIONAL_REQUEST_ID
+            ):
+                # A functional 0x7DF request has no one-to-one physical
+                # request row in the capture.  Attribute each responder's
+                # supported codes to that responder and use the observed
+                # ISO-TP response=request+8 convention to find any curated
+                # metadata for its physical request id.
+                response_id = entry.arbitration_id
+                request_id = ModuleDiscoveryAnalyser._physical_request_id(
+                    response_id
+                )
+                if request_id is None:
+                    continue
+            else:
                 continue
 
             observed: set[tuple[str, str]] = set()
-            for frame in by_id.get(entry.paired_id, []):
-                if frame.fields.get("uds_direction") != "positive_response":
-                    continue
-                uds_data_hex = frame.fields.get("uds_data_hex")
-                if not isinstance(uds_data_hex, str):
-                    continue
-                try:
-                    uds_data = bytes.fromhex(uds_data_hex)
-                except ValueError:
+            for frame in by_id.get(response_id, []):
+                uds_data = ModuleDiscoveryAnalyser._positive_response_payload(frame)
+                if uds_data is None:
                     continue
                 if len(uds_data) >= 3 and uds_data[0] == 0x62:
                     observed.add(("DID", uds_data[1:3].hex().upper()))
@@ -842,7 +880,7 @@ class ModuleDiscoveryAnalyser:
                     observed.add(("PID", f"{uds_data[1]:02X}"))
 
             for code_type, code in sorted(observed):
-                reference = known.get((entry.arbitration_id, code_type, code))
+                reference = known.get((request_id, code_type, code))
                 entry.supported_codes.append(
                     SupportedDiagnosticCode(
                         code_type=code_type,
@@ -859,9 +897,47 @@ class ModuleDiscoveryAnalyser:
         directions = [f.fields.get("uds_direction") for f in id_frames]
         if any(d == "request" for d in directions):
             return "request"
-        if any(d in ("positive_response", "negative_response") for d in directions):
+        if any(d in ("positive_response", "negative_response") for d in directions) or any(
+            ModuleDiscoveryAnalyser._positive_response_payload(frame) is not None
+            for frame in id_frames
+        ):
             return "response"
         return "unknown"
+
+    @staticmethod
+    def _physical_request_id(response_id: str) -> str | None:
+        try:
+            request_id = int(response_id, 16) - 8
+        except ValueError:
+            return None
+        return f"{request_id:X}" if request_id >= 0 else None
+
+    @staticmethod
+    def _positive_response_payload(frame: Frame) -> bytes | None:
+        """Return a supported-code response payload when one is proven.
+
+        A complete UDS response is classified by :class:`UdsDecoder`.  An
+        incomplete ISO-TP First Frame cannot be fully decoded, but its
+        captured ``62 DID_HI DID_LO`` or ``41 PID`` prefix still proves that
+        the addressed module positively answered that code.  The remaining
+        bytes are deliberately not interpreted.
+        """
+        uds_data_hex = frame.fields.get("uds_data_hex")
+        if not isinstance(uds_data_hex, str):
+            return None
+        try:
+            uds_data = bytes.fromhex(uds_data_hex)
+        except ValueError:
+            return None
+        if frame.fields.get("uds_direction") == "positive_response":
+            return uds_data
+        if (
+            frame.fields.get("iso_tp_type") == "first_frame"
+            and uds_data
+            and uds_data[0] in (0x41, 0x62)
+        ):
+            return uds_data
+        return None
 
     @staticmethod
     def _stats_for(
@@ -873,7 +949,9 @@ class ModuleDiscoveryAnalyser:
             if f.fields.get("timestamp_ms") is not None
         ]
         positive = sum(
-            1 for f in id_frames if f.fields.get("uds_direction") == "positive_response"
+            1
+            for f in id_frames
+            if ModuleDiscoveryAnalyser._positive_response_payload(f) is not None
         )
         negative = sum(
             1 for f in id_frames if f.fields.get("uds_direction") == "negative_response"
@@ -1090,6 +1168,30 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "G-scan reading during input/ford/log_002-TCM.csv: raw 6 matched "
         "the photographed commanded gear 6. Non-forward values remain "
         "unmapped.",
+    ),
+    "1E23": (
+        "Transmission Range Selector Position",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: raw enum: "
+        "0x46=P, 0x3C=R, 0x32=N, 0x2E=D, 0x0A=S. Source: user-confirmed "
+        "controlled field captures 2026-08-31 in input/ford/log_016 TCM1.csv "
+        "and input/ford/log_017 TCM2.csv. Both captures recorded the deliberate "
+        "P, R, N, D, S selector sequence and produced the same raw transition "
+        "order. TCM1 also repeated 0x2E=D -> 0x0A=S -> 0x2E=D twice; TCM2 "
+        "independently repeated the D-to-S transition.",
+    ),
+    "1E18": (
+        "Transmission Sport/Manual Shift Input",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: raw enum: "
+        "0x00070000=D, 0x00030000=S, 0x00010000=S-, 0x00020000=S+. "
+        "Source: user-confirmed controlled field captures 2026-08-31 in "
+        "input/ford/log_016 TCM1.csv and input/ford/log_017 TCM2.csv. In both "
+        "captures the four-byte value changed from 00 07 00 00 in D to "
+        "00 03 00 00 in S. TCM1, which the user confirmed was the S- test, "
+        "recorded momentary 00 01 00 00 pulses before returning to S; TCM2, "
+        "confirmed as the S+ test, recorded a momentary 00 02 00 00 pulse "
+        "before returning to S.",
     ),
     "1E1B": (
         "Output Shaft Speed",
@@ -1497,6 +1599,8 @@ DID_MODULE_HINTS: dict[str, str] = {
     "1E1C": "TCM",
     "1E1D": "TCM",
     "1E12": "TCM",
+    "1E23": "TCM",
+    "1E18": "TCM",
     "1E1B": "TCM",
     "1505": "TCM",
     "F40C": "TCM",
@@ -1557,6 +1661,15 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
     "1E1F": ("raw", "gear"),
     "1E1D": ("raw / 1000", "V"),
     "1E12": ("raw", "gear"),
+    "1E23": (
+        "raw enum: 0x46=P, 0x3C=R, 0x32=N, 0x2E=D, 0x0A=S",
+        "state",
+    ),
+    "1E18": (
+        "raw enum: 0x00070000=D, 0x00030000=S, 0x00010000=S-, "
+        "0x00020000=S+",
+        "state",
+    ),
     "1E1B": ("raw / 4", "rpm"),
     "1505": ("raw / 128", "km/h"),
     "F40C": ("raw / 4", "rpm"),

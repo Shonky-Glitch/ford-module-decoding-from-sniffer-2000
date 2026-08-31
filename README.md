@@ -69,7 +69,7 @@ Decoding 2000/
    - `can_id_summary.csv`, `module_discovery.csv`, `report.txt` - statistics/reports
    - `known_pids.csv` - static reference table of every known PID/DID
    - `ford_module_profiles.csv` - proven bus/address/session/wake profiles and
-     discovery-supported DID allowlists for PCM, TCM, IPC, BdyCM, and GWM
+     discovery-supported DID allowlists for all 14 confirmed Ford modules
    - `telemetry/candidates.csv` - DIDs whose value changed across repeated reads (candidates for live telemetry), including an `observed_pattern` shape hint and `confidence` level (`confirmed` vs `unidentified`)
 
    `known_pids.csv` is module-aware: a DID shared by multiple ECUs receives a

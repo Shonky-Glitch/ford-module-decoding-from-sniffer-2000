@@ -23,8 +23,14 @@ from frame_analyser import (  # noqa: E402
     analyse,
     build_known_did_reference,
 )
-from ford_profiles import FORD_PROFILE_BY_NAME  # noqa: E402
-from log_reader import CSV_HEADER, CSV_HEADER_DISCOVERY, read_log_file  # noqa: E402
+from bmw_analyser import BmwFrameParser  # noqa: E402
+from ford_profiles import FORD_MODULE_PROFILES, FORD_PROFILE_BY_NAME  # noqa: E402
+from log_reader import (  # noqa: E402
+    CSV_HEADER,
+    CSV_HEADER_DISCOVERY,
+    CSV_HEADER_PROTOCOL_DIRECTION,
+    read_log_file,
+)
 from hyundai_signals import HYUNDAI_CAN_ID_NAMES, HYUNDAI_CONFIRMED_SIGNALS  # noqa: E402
 from models import (  # noqa: E402
     KnownDidEntry,
@@ -225,6 +231,37 @@ def test_module_discovery_finds_paired_response():
     assert request_entry.module_present is True
 
 
+def test_all_confirmed_ford_modules_have_machine_readable_profiles():
+    expected_pairs = {
+        "PCM": ("CAN1", "7E0", "7E8"),
+        "TCM": ("CAN1", "7E1", "7E9"),
+        "IPC": ("CAN2", "720", "728"),
+        "BdyCM": ("CAN1", "726", "72E"),
+        "GWM": ("CAN2", "716", "71E"),
+        "IPMA": ("CAN2", "706", "70E"),
+        "SCCM": ("CAN2", "724", "72C"),
+        "ACM": ("CAN2", "727", "72F"),
+        "PSCM": ("CAN2", "730", "738"),
+        "RCM": ("CAN2", "737", "73F"),
+        "RTM": ("CAN2", "751", "759"),
+        "ABS": ("CAN2", "760", "768"),
+        "TRM": ("CAN2", "791", "799"),
+        "FCIM": ("CAN2", "7A7", "7AF"),
+    }
+
+    actual_pairs = {
+        profile.name: (profile.bus, profile.request_id, profile.response_id)
+        for profile in FORD_MODULE_PROFILES
+    }
+
+    assert actual_pairs == expected_pairs
+    for name in expected_pairs.keys() - {"PCM", "TCM", "IPC", "BdyCM", "GWM"}:
+        profile = FORD_PROFILE_BY_NAME[name]
+        assert profile.entry_session == "none required"
+        assert profile.exit_session == "none required"
+        assert profile.discovered_dids
+
+
 def test_module_discovery_lists_supported_dids_with_curated_metadata():
     frames = [
         FrameParser().parse(_entry("100000,CAN2,720,0,0,8,03-22-40-4C-00-00-00-00", 1)),
@@ -258,6 +295,64 @@ def test_module_discovery_lists_supported_dids_with_curated_metadata():
     assert request_entry.supported_codes[1].possible_name == "Total Distance (Odometer)"
     assert request_entry.supported_codes[1].formula == "raw / 10"
     assert request_entry.supported_codes[1].unit == "km"
+
+
+def test_functional_discovery_attaches_supported_did_to_each_responder():
+    frames = [
+        FrameParser().parse(_entry("100000,CAN2,7DF,0,0,8,03-22-40-4C-00-00-00-00", 1)),
+        FrameParser().parse(_entry("100010,CAN2,728,0,0,8,06-62-40-4C-1B-AF-99-00", 2)),
+    ]
+    known = [
+        KnownDidEntry(
+            module_name="IPC",
+            request_id="720",
+            response_id="728",
+            bus="CAN2",
+            did="404C",
+            possible_name="Total Distance (Odometer)",
+            confidence="confirmed",
+            formula="raw / 10",
+            unit="km",
+        )
+    ]
+
+    response_entry = next(
+        entry
+        for entry in ModuleDiscoveryAnalyser({"728": "IPC"}).discover(frames, known)
+        if entry.arbitration_id == "728"
+    )
+
+    assert response_entry.role == "response"
+    assert response_entry.paired_id == "7DF"
+    assert response_entry.positive_response_count == 1
+    assert [(code.code_type, code.code) for code in response_entry.supported_codes] == [
+        ("DID", "404C")
+    ]
+    assert response_entry.supported_codes[0].possible_name == "Total Distance (Odometer)"
+    assert response_entry.supported_codes[0].confidence == "confirmed"
+
+
+def test_functional_discovery_keeps_did_from_incomplete_positive_first_frame():
+    frames = [
+        FrameParser().parse(_entry("100000,CAN2,7DF,0,0,8,03-22-F1-10-00-00-00-00", 1)),
+        FrameParser().parse(_entry("100010,CAN2,70E,0,0,8,10-1B-62-F1-10-44-53-2D", 2)),
+    ]
+    IsoTpReassembler().reassemble(frames)
+
+    response_entry = next(
+        entry
+        for entry in ModuleDiscoveryAnalyser({"70E": "IPMA"}).discover(frames)
+        if entry.arbitration_id == "70E"
+    )
+
+    assert not frames[1].valid
+    assert frames[1].fields["iso_tp_reassembly_status"] == "incomplete"
+    assert response_entry.role == "response"
+    assert response_entry.positive_response_count == 1
+    assert [(code.code_type, code.code) for code in response_entry.supported_codes] == [
+        ("DID", "F110")
+    ]
+    assert response_entry.supported_codes[0].confidence == "unidentified"
 
 
 def test_telemetry_candidate_analyser_flags_changing_did_value():
@@ -330,6 +425,15 @@ def test_known_reference_includes_new_confirmed_did_and_pids():
         ("DID", "1E1F"): ("raw", "gear"),
         ("DID", "1E1D"): ("raw / 1000", "V"),
         ("DID", "1E12"): ("raw", "gear"),
+        ("DID", "1E23"): (
+            "raw enum: 0x46=P, 0x3C=R, 0x32=N, 0x2E=D, 0x0A=S",
+            "state",
+        ),
+        ("DID", "1E18"): (
+            "raw enum: 0x00070000=D, 0x00030000=S, 0x00010000=S-, "
+            "0x00020000=S+",
+            "state",
+        ),
         ("DID", "1E1B"): ("raw / 4", "rpm"),
         ("DID", "1505"): ("raw / 128", "km/h"),
         ("DID", "F40C"): ("raw / 4", "rpm"),
@@ -366,6 +470,12 @@ def test_module_aware_profiles_merge_discovery_and_confirmed_gauges():
 
     # Confirmed gauges outside partial discovery coverage are retained.
     assert entries[("TCM", "DID", "1E1B")].formula == "raw / 4"
+    assert entries[("TCM", "DID", "1E23")].possible_name == (
+        "Transmission Range Selector Position"
+    )
+    assert entries[("TCM", "DID", "1E18")].possible_name == (
+        "Transmission Sport/Manual Shift Input"
+    )
     assert entries[("IPC", "DID", "404C")].formula == "raw / 10"
     assert entries[("BdyCM", "DID", "402A")].formula == "(raw / 20) + 6"
     assert entries[("PCM", "DID", "F40C")].formula == "raw / 4"
@@ -419,6 +529,36 @@ def test_discovery_layout_header_and_frame_are_parsed_explicitly(tmp_path):
     assert frame.fields["ext"] is False
     assert frame.fields["rtr"] is False
     assert frame.payload == bytes.fromhex("02 10 03 00 00 00 00 00")
+
+
+def test_protocol_direction_layout_is_parsed_explicitly(tmp_path):
+    path = tmp_path / "ford_protocol_direction.csv"
+    path.write_text(
+        CSV_HEADER_PROTOCOL_DIRECTION
+        + "\n135817,CAN2,7DF,0,0,8,-,-,RAW_CAN,03-22-C1-04-00-00-00-00,TX\n",
+        encoding="utf-8",
+    )
+
+    entries = read_log_file(path)
+    assert len(entries) == 1
+    assert entries[0].column_layout == "11col_protocol_direction"
+
+    frame = FrameParser().parse(entries[0])
+    assert frame is not None
+    assert frame.frame_id == "7DF"
+    assert frame.fields["protocol"] == "RAW_CAN"
+    assert frame.fields["direction"] == "TX"
+    assert frame.payload == bytes.fromhex("03 22 C1 04 00 00 00 00")
+
+    generic_frame = BmwFrameParser().parse(entries[0])
+    assert generic_frame is not None
+    assert generic_frame.protocol == "RAW_CAN"
+    assert generic_frame.payload == frame.payload
+
+    raw_frame = RawCanFrameParser().parse(entries[0])
+    assert raw_frame is not None
+    assert raw_frame.protocol == "RAW_CAN"
+    assert raw_frame.payload == frame.payload
 
 
 

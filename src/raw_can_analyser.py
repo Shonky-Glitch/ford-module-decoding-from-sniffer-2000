@@ -26,8 +26,8 @@ class RawCanFrameParser:
     """Turns a single raw CSV log entry into a RawCanFrame.
 
     Reuses the same column layouts as log_reader.py/frame_analyser.py
-    (7/9/10 columns, disambiguated via RawLogEntry.column_layout for the
-    two 10-column variants) but does NOT run any ISO-TP/UDS decoding over
+    (approved 7/9/10/11-column layouts, disambiguated via
+    RawLogEntry.column_layout) but does NOT run any ISO-TP/UDS decoding over
     the payload; diagnostic framing is not assumed.
     """
 
@@ -42,7 +42,22 @@ class RawCanFrameParser:
             raise ValueError(f"malformed CSV row: {exc}") from exc
 
         protocol: str | None = None
-        if len(row) == 7:
+        if len(row) == 11 and entry.column_layout == "11col_protocol_direction":
+            (
+                ms_str,
+                bus,
+                id_hex,
+                _ext_str,
+                _rtr_str,
+                dlc_str,
+                _pgn,
+                _sa,
+                protocol,
+                data_hex,
+                _direction,
+            ) = (col.strip() for col in row)
+            protocol = protocol or None
+        elif len(row) == 7:
             ms_str, bus, id_hex, _ext_str, _rtr_str, dlc_str, data_hex = (
                 col.strip() for col in row
             )
@@ -86,7 +101,10 @@ class RawCanFrameParser:
                 data_hex,
             ) = (col.strip() for col in row)
         else:
-            raise ValueError(f"expected 7, 9, or 10 columns, got {len(row)}: {row!r}")
+            raise ValueError(
+                "expected an approved 7, 9, 10, or 11-column layout, "
+                f"got {len(row)} columns: {row!r}"
+            )
 
         return RawCanFrame(
             frame_id=id_hex.upper(),
@@ -309,4 +327,3 @@ def analyse(entries: list[RawLogEntry]) -> RawCanAnalysisResult:
     """Parse and analyse every raw entry in one step."""
     frames, errors = parse_all(entries)
     return build_analysis_result(frames, errors, total_entries=len(entries))
-
