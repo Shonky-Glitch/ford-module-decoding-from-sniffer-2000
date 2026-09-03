@@ -1060,6 +1060,36 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
         "30%. These values match the user-observed normal 20-80% soot "
         "range and are distinct from DID 057B's inferred open-loop value.",
     ),
+    "3302": (
+        "Steering Wheel Angle",
+        "confirmed",
+        "Module PSCM (730 request -> 738 response). Equation: "
+        "(raw / 10) - 780 = degrees. Confirmed 2026-09-03 from the "
+        "controlled center/left/center/right/center steering test. In "
+        "input/ford/log_012 headlight off-on-of X3 maby.csv, raw values "
+        "1922-13563 convert to -587.8 through +576.3 degrees; the first "
+        "value converts to +1.3 degrees, the trace repeatedly returns to "
+        "approximately zero between opposite full-lock sweeps, and the "
+        "last value converts to +0.9 degrees. Cross-checked against the "
+        "public Ford enhanced-PID listing for ABS/PSCM DID 3302 using the "
+        "same raw/10-780 equation. Despite its filename, log_012 contains "
+        "the PSCM steering data; the file named log_010 polls the TCM.",
+    ),
+    "61A5": (
+        "Corner Lamp / Dash Illumination State",
+        "confirmed",
+        "Module IPC (720 request -> 728 response). Equation: "
+        "(raw & 0x00800000) != 0; unit: state. Confirmed 2026-09-03 by "
+        "the user's controlled corner-lamp test in input/ford/log_011 "
+        "headlight off-on-of X3 maby.csv. The four-byte response alternates "
+        "between 00 00 04 00 (corner lamps off) and 00 80 04 00 (corner "
+        "lamps on and dash illumination dimmed), producing exactly six "
+        "transitions for three off/on/off cycles. User evidence: 'the "
+        "headlight signel is from corner lamps, the IPC dosent have "
+        "headlights input , this is the closest i could get ,witch when "
+        "the corner lamps come on the dash lights dim'. This is not a "
+        "direct headlight-input DID.",
+    ),
     "404C": (
         "Total Distance (Odometer)",
         "confirmed",
@@ -1136,19 +1166,29 @@ DID_NAME_HYPOTHESES: dict[str, tuple[str, str, str]] = {
     ),
     "1E1C": (
         "Automatic Transmission Fluid Temp (ATF)",
-        "unresolved",
-        "Module TCM (7E1 request -> 7E9 response). 2-byte value. The DID "
-        "name is retained from the user's scan-tool identification, but "
-        "the scaling formula is unresolved. The former raw/10=degC "
-        "formula matched an older claimed live reading in input/log_010.csv "
-        "and log_011.csv (raw 867-874 -> 86.7-87.4 degC), but fails newer "
-        "field evidence: input/log_037.csv raw 1236-1255 would produce "
-        "123.6-125.5 degC while the live scan tool showed 68-69 degC. It "
-        "also produces an implausible corpus maximum of 165.3 degC. A "
-        "possible raw/20+7 equation fits log_037 (68.8-69.75 degC) but "
-        "contradicts the older reading, so it is not adopted without a "
-        "new controlled field correlation. Do not use this DID for a "
-        "scaled gauge yet.",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Equation: "
+        "(raw * 5 / 72) - 17 = degC. Confirmed 2026-09-03 from the user's "
+        "controlled input/ford/log_008 ATF-Temp 10 degrease to 41 "
+        "degrease.csv capture: raw 391-847 converts to 10.15-41.82 degC, "
+        "matching the recorded 10-to-41 degree test. This also reconciles "
+        "the independent input/log_037.csv field evidence: raw 1236-1255 "
+        "converts to 68.83-70.15 degC across the capture containing the "
+        "68-69 degC live scan-tool observation. Independently cross-checked "
+        "against the saeb.net Ranger/Everest OBDLink PID entry for header "
+        "7E1, service 22, DID 1E1C, which gives the same raw*5/72-17 degC "
+        "equation. The former raw/10 equation is rejected.",
+    ),
+    "1E1A": (
+        "Transmission Main Fluid Pressure",
+        "confirmed",
+        "Module TCM (7E1 request -> 7E9 response). Formula: raw; unit: "
+        "raw count. Source: user field-confirmed 2026-09-03 for "
+        "input/ford/log_010 Steering angle-center-left-center-right-center "
+        "X3.csv: 'yea it was Trand main fluid pressure'. The two-byte raw "
+        "value ranges from 202 to 523 in that capture. The physical "
+        "conversion and engineering unit (for example bar or kPa) remain "
+        "unresolved; raw counts must not be presented as scaled pressure.",
     ),
     "1E1D": (
         "Transmission Fluid Temperature Sensor Voltage",
@@ -1596,6 +1636,9 @@ DID_MODULE_HINTS: dict[str, str] = {
     "F446": "PCM",
     "03F6": "PCM",
     "03F5": "PCM",
+    "3302": "PSCM",
+    "61A5": "IPC",
+    "1E1A": "TCM",
     "1E1C": "TCM",
     "1E1D": "TCM",
     "1E12": "TCM",
@@ -1655,9 +1698,13 @@ DID_PID_FORMULA_UNITS: dict[str, tuple[str, str]] = {
     "402B": ("raw - 127", "A"),
     "4028": ("raw", "%"),
     "4029": ("raw - 40", "degC"),
+    "3302": ("(raw / 10) - 780", "deg"),
+    "61A5": ("(raw & 0x00800000) != 0", "state"),
     "03F6": ("raw * 5", "degC"),
     "03F5": ("raw * 5", "degC"),
     "051C": ("raw - 40", "degC"),
+    "1E1A": ("raw", "raw count"),
+    "1E1C": ("(raw * 5 / 72) - 17", "degC"),
     "1E1F": ("raw", "gear"),
     "1E1D": ("raw / 1000", "V"),
     "1E12": ("raw", "gear"),

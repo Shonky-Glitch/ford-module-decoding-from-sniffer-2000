@@ -422,6 +422,8 @@ def test_known_reference_includes_new_confirmed_did_and_pids():
         ("DID", "404C"): ("raw / 10", "km"),
         ("DID", "402B"): ("raw - 127", "A"),
         ("DID", "0579"): ("B", "%"),
+        ("DID", "1E1A"): ("raw", "raw count"),
+        ("DID", "1E1C"): ("(raw * 5 / 72) - 17", "degC"),
         ("DID", "1E1F"): ("raw", "gear"),
         ("DID", "1E1D"): ("raw / 1000", "V"),
         ("DID", "1E12"): ("raw", "gear"),
@@ -470,6 +472,11 @@ def test_module_aware_profiles_merge_discovery_and_confirmed_gauges():
 
     # Confirmed gauges outside partial discovery coverage are retained.
     assert entries[("TCM", "DID", "1E1B")].formula == "raw / 4"
+    assert entries[("TCM", "DID", "1E1A")].possible_name == (
+        "Transmission Main Fluid Pressure"
+    )
+    assert entries[("TCM", "DID", "1E1A")].unit == "raw count"
+    assert entries[("TCM", "DID", "1E1C")].formula == "(raw * 5 / 72) - 17"
     assert entries[("TCM", "DID", "1E23")].possible_name == (
         "Transmission Range Selector Position"
     )
@@ -477,6 +484,15 @@ def test_module_aware_profiles_merge_discovery_and_confirmed_gauges():
         "Transmission Sport/Manual Shift Input"
     )
     assert entries[("IPC", "DID", "404C")].formula == "raw / 10"
+    assert entries[("IPC", "DID", "61A5")].possible_name == (
+        "Corner Lamp / Dash Illumination State"
+    )
+    assert entries[("IPC", "DID", "61A5")].confidence == "confirmed"
+    assert entries[("IPC", "DID", "61A5")].formula == (
+        "(raw & 0x00800000) != 0"
+    )
+    assert entries[("PSCM", "DID", "3302")].formula == "(raw / 10) - 780"
+    assert entries[("PSCM", "DID", "3302")].confidence == "confirmed"
     assert entries[("BdyCM", "DID", "402A")].formula == "(raw / 20) + 6"
     assert entries[("PCM", "DID", "F40C")].formula == "raw / 4"
 
